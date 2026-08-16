@@ -154,58 +154,63 @@ fun StepShiftApp(
             )
         }
     ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                // Consume the insets Scaffold already turned into padding, so
-                // children (e.g. ControlPanel.navigationBarsPadding) do not
-                // apply the navigation-bar inset a second time.
-                .consumeWindowInsets(innerPadding)
-        ) {
-            // 1. Fullscreen Map View with Real-time Camera Tracking
-            MapViewContainer(
-                modifier = Modifier.fillMaxSize(),
-                startPoint = startPoint,
-                endPoint = endPoint,
-                routeResult = routeResult,
-                snapshot = snapshot,
-                isTrackingEnabled = isTrackingEnabled,
-                centerEvent = viewModel.mapCenterEvent,
-                onMapClick = { viewModel.onMapClick(it) },
-                onToggleTracking = { viewModel.toggleTracking(context) },
-                onUserPanMap = { viewModel.onUserPanMap() }
-            )
-
-            // 2. Top Floating Area (Search Bar + Telemetry HUD)
-            Column(
+        // Outer box spans the full content area INCLUDING the navigation-bar strip,
+        // so the bottom panel's background can reach the physical screen edge.
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    // Consume the insets Scaffold already turned into padding, so
+                    // children do not apply the navigation-bar inset a second time.
+                    .consumeWindowInsets(innerPadding)
             ) {
-                // Search Bar Overlay
-                SearchBarOverlay(
-                    query = searchQuery,
-                    results = searchResults,
-                    isSearching = isSearching,
-                    onQueryChange = { viewModel.onSearchQueryChanged(it) },
-                    onClearQuery = { viewModel.clearSearch() },
-                    onSelectLocation = { result, asStart ->
-                        viewModel.onSearchResultSelected(result, asStart)
-                    }
+                // 1. Fullscreen Map View with Real-time Camera Tracking
+                MapViewContainer(
+                    modifier = Modifier.fillMaxSize(),
+                    startPoint = startPoint,
+                    endPoint = endPoint,
+                    routeResult = routeResult,
+                    snapshot = snapshot,
+                    isTrackingEnabled = isTrackingEnabled,
+                    centerEvent = viewModel.mapCenterEvent,
+                    onMapClick = { viewModel.onMapClick(it) },
+                    onToggleTracking = { viewModel.toggleTracking(context) },
+                    onUserPanMap = { viewModel.onUserPanMap() }
                 )
 
-                // Telemetry Dashboard HUD (hidden while idle or while search results are shown)
-                AnimatedVisibility(visible = showDashboard) {
-                    TelemetryDashboard(
-                        modifier = Modifier.padding(horizontal = 14.dp),
-                        snapshot = snapshot
+                // 2. Top Floating Area (Search Bar + Telemetry HUD)
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Search Bar Overlay
+                    SearchBarOverlay(
+                        query = searchQuery,
+                        results = searchResults,
+                        isSearching = isSearching,
+                        onQueryChange = { viewModel.onSearchQueryChanged(it) },
+                        onClearQuery = { viewModel.clearSearch() },
+                        onSelectLocation = { result, asStart ->
+                            viewModel.onSearchResultSelected(result, asStart)
+                        }
                     )
+
+                    // Telemetry Dashboard HUD (hidden while idle or while search results are shown)
+                    AnimatedVisibility(visible = showDashboard) {
+                        TelemetryDashboard(
+                            modifier = Modifier.padding(horizontal = 14.dp),
+                            snapshot = snapshot
+                        )
+                    }
                 }
             }
 
-            // 3. Bottom Control Panel (Edge-to-edge; nav-bar inset comes from innerPadding above)
+            // 3. Bottom Control Panel — sibling overlay whose background extends
+            //    to the physical bottom edge (seamless with the gesture pill);
+            //    its own content applies navigationBarsPadding internally.
             ControlPanel(
                 modifier = Modifier.align(Alignment.BottomCenter),
                 snapshot = snapshot,

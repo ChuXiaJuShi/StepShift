@@ -49,7 +49,7 @@ StepShift
         ├── MapViewContainer.kt     // 1Hz 动态视角追踪、手势拖拽自动解耦、overlay 差量更新与图标缓存
         ├── SearchBarOverlay.kt     // 悬浮式输入联想与起点/终点快捷设定 (选点自动收起键盘)
         ├── TelemetryDashboard.kt   // 赛博暗夜风格运动数据 HUD 仪表盘 (仅仿真激活时显示)
-        ├── ControlPanel.kt         // 速度/步数/启停控制面板 (完整按钮状态机、全面屏底部小白条单次避让)
+        ├── ControlPanel.kt         // 速度/步数/启停控制面板 (背景贴合屏幕底边与小白条无缝融合、可折叠细条+紧凑操作按钮)
         └── SettingsDialog.kt       // Root 权限强赋权、高斯漂移调节与自定义步频弹窗
 ```
 
