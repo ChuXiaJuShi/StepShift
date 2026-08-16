@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Glowing Speed Track Wave -->
+    <path
+        android:pathData="M32,74 C36,78 48,82 58,74 C68,66 72,56 80,50"
+        android:strokeWidth="4"
+        android:strokeColor="#3300E5FF"
+        android:strokeLineCap="round" />
+
+    <path
+        android:pathData="M28,68 C34,74 44,76 54,68 C64,60 70,50 78,42"
+        android:strokeWidth="5"
+        android:strokeLineCap="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="28"
+                android:startY="68"
+                android:endX="78"
+                android:endY="42"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#00E676" />
+                <item android:offset="1.0" android:color="#00E5FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Runner Head -->
+    <path
+        android:pathData="M59,33 A5,5 0 1,1 59,23 A5,5 0 1,1 59,33 Z"
+        android:fillColor="#00E5FF" />
+
+    <!-- Runner Body & Dynamic Limbs -->
+    <path
+        android:pathData="M54,37 L47,47 L36,44 M47,47 L58,49 L68,43 M58,49 L53,60 L40,66 M53,60 L63,68 L71,80"
+        android:strokeWidth="4.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Location Waypoint Pin Accent -->
+    <path
+        android:pathData="M74,32 C74,27.5 70.5,24 66,24 C61.5,24 58,27.5 58,32 C58,37.5 66,45 66,45 C66,45 74,37.5 74,32 Z"
+        android:fillColor="#00E676" />
+    <path
+        android:pathData="M66,33 A2,2 0 1,1 66,29 A2,2 0 1,1 66,33 Z"
+        android:fillColor="#0F172A" />
+
+    <!-- Step / Particle Energy Dots -->
+    <path
+        android:pathData="M34,78 A2,2 0 1,1 34,74 A2,2 0 1,1 34,78 Z"
+        android:fillColor="#00E676" />
+    <path
+        android:pathData="M44,82 A2.5,2.5 0 1,1 44,77 A2.5,2.5 0 1,1 44,82 Z"
+        android:fillColor="#00E5FF" />
+    <path
+        android:pathData="M78,62 A2,2 0 1,1 78,58 A2,2 0 1,1 78,62 Z"
+        android:fillColor="#00E5FF" />
+
+</vector>
