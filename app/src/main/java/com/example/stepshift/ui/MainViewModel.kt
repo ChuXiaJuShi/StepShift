@@ -146,6 +146,13 @@ class MainViewModel(
     }
 
     fun onSearchResultSelected(result: SearchLocationResult, asStart: Boolean) {
+        // Same guard as onMapClick: never rewire the route while a simulation is live
+        if (snapshot.value.status == SimulationStatus.RUNNING || snapshot.value.status == SimulationStatus.PAUSED) {
+            viewModelScope.launch {
+                _toastMessage.emit("仿真运行中，请先【结束】再修改路线")
+            }
+            return
+        }
         clearSearch()
         viewModelScope.launch {
             _mapCenterEvent.emit(result.point)
@@ -285,7 +292,14 @@ class MainViewModel(
     }
 
     fun onMapClick(point: GeoPoint) {
-        if (snapshot.value.status == SimulationStatus.RUNNING) return
+        // Block while a simulation is live (RUNNING *or* PAUSED) — re-planning would
+        // reset the engine mid-run and desync the foreground service / notification.
+        if (snapshot.value.status == SimulationStatus.RUNNING || snapshot.value.status == SimulationStatus.PAUSED) {
+            viewModelScope.launch {
+                _toastMessage.emit("仿真运行中，请先【结束】再修改路线")
+            }
+            return
+        }
 
         when (_selectionMode.value) {
             SelectionMode.SET_START -> {
@@ -345,14 +359,20 @@ class MainViewModel(
         }
     }
 
-    fun clearRoute() {
-        if (snapshot.value.status == SimulationStatus.RUNNING) return
+    fun clearRoute(context: Context) {
+        val status = snapshot.value.status
+        if (status == SimulationStatus.RUNNING || status == SimulationStatus.PAUSED) return
         _startPoint.value = null
         _endPoint.value = null
         _routeResult.value = null
         _selectionMode.value = SelectionMode.SET_START
         engine.stop()
         engine.setRoute(emptyList())
+        // After COMPLETED the service lingers in a detached state — shut it down so
+        // no orphaned foreground service / summary notification is left behind.
+        if (status == SimulationStatus.COMPLETED) {
+            MockForegroundService.stopService(context)
+        }
     }
 
     fun startSimulation(context: Context) {

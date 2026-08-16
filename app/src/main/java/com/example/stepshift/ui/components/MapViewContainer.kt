@@ -25,6 +25,7 @@ import com.example.stepshift.model.GeoPoint
 import com.example.stepshift.model.RouteResult
 import com.example.stepshift.model.SimulationSnapshot
 import com.example.stepshift.model.SimulationStatus
+import com.example.stepshift.utils.CoordinateTransform
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import org.osmdroid.events.MapEventsReceiver
@@ -57,6 +58,24 @@ fun MapViewContainer(
     var currentTileSourceIndex by remember { mutableIntStateOf(0) }
     var showTileMenu by remember { mutableStateOf(false) }
 
+    val currentSpec = TileSourceManager.ALL_TILE_SOURCES[currentTileSourceIndex]
+    // Stable capture for long-lived closures (map tap receiver, center-event collector)
+    // so they always convert with the CURRENTLY active tile datum, not a stale value.
+    val specState = rememberUpdatedState(currentSpec)
+
+    // All business logic, routing and GPS injection use WGS-84; AMap tiles render in
+    // GCJ-02 — display coordinates must be projected into the active tile datum.
+    fun GeoPoint.toMapGeoPoint(): OsmGeoPoint {
+        val display = if (specState.value.isGcj02) CoordinateTransform.wgs84ToGcj02(this) else this
+        return OsmGeoPoint(display.latitude, display.longitude)
+    }
+
+    // Screen taps arrive in the tile datum — convert back to WGS-84 before use.
+    fun OsmGeoPoint.toWgsGeoPoint(): GeoPoint {
+        val raw = GeoPoint(latitude, longitude)
+        return if (specState.value.isGcj02) CoordinateTransform.gcj02ToWgs84(raw) else raw
+    }
+
     // Overlays
     var startMarker by remember { mutableStateOf<Marker?>(null) }
     var endMarker by remember { mutableStateOf<Marker?>(null) }
@@ -70,11 +89,14 @@ fun MapViewContainer(
     var appliedStart by remember { mutableStateOf<GeoPoint?>(null) }
     var appliedEnd by remember { mutableStateOf<GeoPoint?>(null) }
     var appliedBearingBucket by remember { mutableIntStateOf(Int.MIN_VALUE) }
+    var appliedTileSourceIndex by remember { mutableIntStateOf(-1) }
 
     // Marker icons are immutable — create once instead of every recomposition.
     val startMarkerIcon = remember(context) { createCircleMarkerDrawable(ctx = context, colorHex = "#00E676", label = "起") }
     val endMarkerIcon = remember(context) { createCircleMarkerDrawable(ctx = context, colorHex = "#FF5252", label = "终") }
 
+    // Default center = Tiananmen (WGS-84). The initial tile source (index 0) is the
+    // WGS-84-aligned AMap vector endpoint, so no projection is needed here.
     val defaultCenter = remember { OsmGeoPoint(39.9042, 116.4074) }
 
     // Receiver reference
@@ -82,8 +104,9 @@ fun MapViewContainer(
         object : MapEventsReceiver {
             override fun singleTapConfirmedHelper(p: OsmGeoPoint?): Boolean {
                 if (p != null) {
-                    Log.d("StepShift", "Map single tap: lat=${p.latitude}, lon=${p.longitude}")
-                    onMapClick(GeoPoint(p.latitude, p.longitude))
+                    val wgs = p.toWgsGeoPoint()
+                    Log.d("StepShift", "Map single tap: lat=${wgs.latitude}, lon=${wgs.longitude}")
+                    onMapClick(wgs)
                     return true
                 }
                 return false
@@ -91,8 +114,9 @@ fun MapViewContainer(
 
             override fun longPressHelper(p: OsmGeoPoint?): Boolean {
                 if (p != null) {
-                    Log.d("StepShift", "Map long press: lat=${p.latitude}, lon=${p.longitude}")
-                    onMapClick(GeoPoint(p.latitude, p.longitude))
+                    val wgs = p.toWgsGeoPoint()
+                    Log.d("StepShift", "Map long press: lat=${wgs.latitude}, lon=${wgs.longitude}")
+                    onMapClick(wgs)
                     return true
                 }
                 return false
@@ -120,8 +144,8 @@ fun MapViewContainer(
     LaunchedEffect(mapViewRef, centerEvent) {
         val mapView = mapViewRef ?: return@LaunchedEffect
         centerEvent?.collectLatest { target ->
-            val osmTarget = target.toOsmGeoPoint()
             Log.d("StepShift", "Map center event -> lat=${target.latitude}, lon=${target.longitude}")
+            val osmTarget = target.toMapGeoPoint()
             mapView.post {
                 mapView.controller.apply {
                     setZoom(17.0)
@@ -138,7 +162,7 @@ fun MapViewContainer(
         val mapView = mapViewRef ?: return@LaunchedEffect
         if (isTrackingEnabled && pt != null && (snapshot.status == SimulationStatus.RUNNING || snapshot.status == SimulationStatus.PAUSED)) {
             mapView.post {
-                mapView.controller.setCenter(pt.toOsmGeoPoint())
+                mapView.controller.setCenter(pt.toMapGeoPoint())
                 mapView.invalidate()
             }
         }
@@ -193,6 +217,26 @@ fun MapViewContainer(
                     mapView.overlays.add(0, MapEventsOverlay(receiver))
                 }
 
+                // 0. Tile datum switched (GCJ-02 <-> WGS-84) -> force a full overlay
+                //    rebuild so every coordinate is re-projected for the new source.
+                if (currentTileSourceIndex != appliedTileSourceIndex) {
+                    routeUnderlay?.let { mapView.overlays.remove(it) }
+                    routePolyline?.let { mapView.overlays.remove(it) }
+                    startMarker?.let { mapView.overlays.remove(it) }
+                    endMarker?.let { mapView.overlays.remove(it) }
+                    walkerMarker?.let { mapView.overlays.remove(it) }
+                    routeUnderlay = null
+                    routePolyline = null
+                    startMarker = null
+                    endMarker = null
+                    walkerMarker = null
+                    appliedRoute = null
+                    appliedStart = null
+                    appliedEnd = null
+                    appliedBearingBucket = Int.MIN_VALUE
+                    appliedTileSourceIndex = currentTileSourceIndex
+                }
+
                 // 1. Route polyline (dark underlay + cyan core) — rebuilt only when the route changes
                 if (routeResult !== appliedRoute) {
                     routeUnderlay?.let { mapView.overlays.remove(it) }
@@ -200,7 +244,7 @@ fun MapViewContainer(
                     routeUnderlay = null
                     routePolyline = null
                     if (routeResult != null && routeResult.points.size >= 2) {
-                        val geoPoints = routeResult.points.map { it.toOsmGeoPoint() }
+                        val geoPoints = routeResult.points.map { it.toMapGeoPoint() }
                         val underlay = Polyline(mapView).apply {
                             outlinePaint.color = android.graphics.Color.parseColor("#66101825")
                             outlinePaint.strokeWidth = 22f
@@ -242,7 +286,7 @@ fun MapViewContainer(
                     startMarker = null
                     if (startPoint != null) {
                         val marker = Marker(mapView).apply {
-                            position = startPoint.toOsmGeoPoint()
+                            position = startPoint.toMapGeoPoint()
                             title = "起点"
                             icon = startMarkerIcon
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
@@ -259,7 +303,7 @@ fun MapViewContainer(
                     endMarker = null
                     if (endPoint != null) {
                         val marker = Marker(mapView).apply {
-                            position = endPoint.toOsmGeoPoint()
+                            position = endPoint.toMapGeoPoint()
                             title = "终点"
                             icon = endMarkerIcon
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
@@ -286,7 +330,7 @@ fun MapViewContainer(
                         walkerMarker = newMarker
                         appliedBearingBucket = Int.MIN_VALUE
                     }
-                    marker.position = currentPos.toOsmGeoPoint()
+                    marker.position = currentPos.toMapGeoPoint()
                     if (bucket != appliedBearingBucket) {
                         marker.icon = createWalkerDirectionalDrawable(ctx = context, bearingDegrees = bucket * 5f)
                         appliedBearingBucket = bucket
@@ -324,11 +368,11 @@ fun MapViewContainer(
                     expanded = showTileMenu,
                     onDismissRequest = { showTileMenu = false }
                 ) {
-                    TileSourceManager.ALL_TILE_SOURCES.forEachIndexed { index, pair ->
+                    TileSourceManager.ALL_TILE_SOURCES.forEachIndexed { index, spec ->
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    text = pair.first,
+                                    text = spec.label,
                                     fontWeight = if (index == currentTileSourceIndex) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
                                     color = if (index == currentTileSourceIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                 )
@@ -336,7 +380,7 @@ fun MapViewContainer(
                             onClick = {
                                 currentTileSourceIndex = index
                                 showTileMenu = false
-                                mapViewRef?.setTileSource(pair.second)
+                                mapViewRef?.setTileSource(spec.tileSource)
                                 mapViewRef?.invalidate()
                             }
                         )

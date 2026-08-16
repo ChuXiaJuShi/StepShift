@@ -63,9 +63,24 @@ object TileSourceManager {
      */
     val OSM_MAPNIK: ITileSource = TileSourceFactory.MAPNIK
 
+    /**
+     * Tile source descriptor. [isGcj02] marks sources whose tiles are rendered in
+     * the GCJ-02 (Mars) datum — display coordinates must be converted from WGS-84
+     * before drawing, and screen taps converted back to WGS-84.
+     *
+     * NOTE: the two AMap endpoints differ! The `wprd0x` vector endpoint (style=7)
+     * serves WGS-84-aligned tiles (the community-known 无偏移 source), while the
+     * `webst0x` satellite endpoint (style=6) serves GCJ-02-offset tiles.
+     */
+    data class TileSourceSpec(
+        val label: String,
+        val tileSource: ITileSource,
+        val isGcj02: Boolean
+    )
+
     val ALL_TILE_SOURCES = listOf(
-        "高德街道地图 (推荐)" to AMAP_VECTOR,
-        "高德卫星地图" to AMAP_SATELLITE,
-        "OpenStreetMap 官方" to OSM_MAPNIK
+        TileSourceSpec("高德街道地图 (推荐)", AMAP_VECTOR, isGcj02 = false),
+        TileSourceSpec("高德卫星地图", AMAP_SATELLITE, isGcj02 = true),
+        TileSourceSpec("OpenStreetMap 官方", OSM_MAPNIK, isGcj02 = false)
     )
 }

@@ -121,3 +121,53 @@ app/src/main/java/com/example/stepshift/ui/MainViewModel.kt
 app/src/main/java/com/example/stepshift/ui/components/ControlPanel.kt  (重构)
 app/src/main/java/com/example/stepshift/ui/StepShiftApp.kt             (面板改为同级浮层)
 ```
+
+---
+
+# 第三轮优化（2026-08-17 04:21，功能深度审查与修复）
+
+## 6. 功能级问题排查（全代码审查 + 真机验证）
+
+### 6.1 P0：坐标基准（Datum）混乱 —— CoordinateTransform 从未接线
+- **审查发现**：`CoordinateTransform`（WGS-84 ↔ GCJ-02）存在于代码库与文档中，但**从未被任何业务代码调用**。高德卫星源（`webst0x`，style=6）瓦片是 GCJ-02 火星坐标，而路线/Marker/行走者/点选全部使用 WGS-84 裸坐标 → 卫星图下路线偏移约 556m（北京），卫星图上点选的位置与实际注入的 GPS 偏差数百米。
+- **关键实测结论（勿踩坑）**：本项目默认矢量源用的是 `wprd0x` 主机（style=7）——社区公认的 **WGS-84 无偏移**源；只有 `webst0x`（卫星）与 `webrd0x`（style=8）才是 GCJ-02。审查初期曾误判"矢量图也偏了"，真机对照（转换前后同坐标截图对比）证实矢量源本就无偏移。**按瓦片源分别标记基准**才是正确架构。
+- **修复**：`TileSourceManager` 每个源带 `isGcj02` 标记（wprd 矢量=false、webst 卫星=true、OSM=false）；`MapViewContainer` 显示链路（路线/Marker/行走者/居中/追踪）按当前源做 WGS→GCJ 投影，点选链路做 GCJ→WGS 反投影；切换瓦片源时强制重建所有 overlay 重新投影。
+- **验证**：JVM 单测（天安门 GCJ 偏移 556m ∈ [300,800]、往返误差 <1e-5°、国外坐标直通）全部通过；真机矢量图视图与修复前完全一致（无回归），卫星图路线精确贴合长安街与地面街巷。
+
+### 6.2 P1：仿真完成后 WakeLock 与前台服务永不释放
+- **问题**：`observeEngineState` 的 COMPLETED 分支是空注释。Partial WakeLock 空持有 → CPU 无法深睡，通知栏卡在错误的"已暂停"标题，一放几小时持续耗电。
+- **修复**：COMPLETED → `releaseWakeLock()` + `stopForeground(DETACH)`（通知保留为完成总结卡片、可滑掉）；`ACTION_START` 重新 `acquireWakeLock()` 并重建 TestProvider（覆盖服务存活下的重启路径）；通知标题区分四态（仿真中/已暂停/已完成/待命），暂停/继续/结束按钮只在活跃状态出现。
+- **验证**：0.71km@24km/h 短路线跑到完成，真机 `dumpsys power` 显示 `REL StepShift::KeepAliveWakeLock`、`Wake Locks: size=0`；服务记录无 `isForeground`（已脱离前台）；通知标题"仿真已完成 ✅"内容正确。
+
+### 6.3 P1：运行/暂停中可改路线冲掉引擎状态
+- **问题**：`onMapClick` 只挡 RUNNING 漏了 PAUSED；`onSearchResultSelected` 完全没有防护；`clearRoute` 在 PAUSED 下可用 → `engine.setRoute` 直接重置运行中的引擎，通知栏/服务/UI 三方状态错乱。
+- **修复**：三处统一在 RUNNING/PAUSED 下拦截并 toast「仿真运行中，请先【结束】再修改路线」；`clearRoute(context)` 在 COMPLETED 后一并停掉残留服务；「重选」按钮在 PAUSED 时隐藏。
+- **验证**：真机运行中点地图/搜索选点均弹出拦截 toast，路线与引擎状态不受影响。
+
+### 6.4 P1：RootShellExecutor stderr 从未读取 + Root 检测误判
+- **问题**：`errorReader` 创建后从未消费——命令若大量输出 stderr，管道缓冲填满会让 su 进程死锁（`readLine()` 永久阻塞且持有同步锁，所有 Root 操作卡死），与 PROBLEM.md 第 1 条声称的防护不符；`isRootAvailable` 的 `|| exitCode == 0` 使部分 ROM 上 su 被拒但以 shell 身份执行 `id` 也误判为已 Root。
+- **修复**：`ProcessBuilder.redirectErrorStream(true)` 将 stderr 合流进 stdout 一并消费；Root 检测收紧为仅认 `uid=0`。
+
+### 6.5 P2：通知栏 1Hz 全量 notify
+- **问题**：每 1Hz tick 都 `notify()`，与 PROBLEM.md 第 2 条声称的节流不符，部分 ROM 会触发 SystemUI 速率限制。
+- **修复**：`updateNotification` 加节流——状态切换立即更新，普通数据 tick 最小间隔 2s。
+
+### 6.6 记录在案但未改动（避免范围蔓延，供后续参考）
+1. `targetSteps` / `targetDistanceM`（目标步数/距离自动完成）引擎已支持但 UI 无入口；`updateTargetSteps/updateTargetDistance/updateCadence/resetSimulation` 为未被调用的 ViewModel API。
+2. 1Hz ticker 用 `delay(1000)` 存在累计时钟漂移（约 0.3%），内部计数自洽、影响极小。
+3. 离线降级路线的耗时估算固定按 5km/h，不随当前配速变化（仅 toast 文案偏差）。
+4. `NoiseGenerator` 海拔 `coerceAtLeast(0.0)` 对负海拔地区会钳制（国内无影响）。
+5. 微信运动广播对现代版本微信的实际有效性有限（需系统签名级权限），属产品层面局限。
+
+### 6.7 修改文件
+```
+app/src/main/java/com/example/stepshift/ui/components/TileSourceManager.kt  (isGcj02 按源标记)
+app/src/main/java/com/example/stepshift/ui/components/MapViewContainer.kt   (双向投影 + 切源重建)
+app/src/main/java/com/example/stepshift/service/MockForegroundService.kt    (COMPLETED 释放/重启重建)
+app/src/main/java/com/example/stepshift/service/NotificationHelper.kt       (四态标题 + 节流)
+app/src/main/java/com/example/stepshift/ui/MainViewModel.kt                 (运行守卫 + clearRoute 清理)
+app/src/main/java/com/example/stepshift/ui/StepShiftApp.kt                  (clearRoute 传 context)
+app/src/main/java/com/example/stepshift/ui/components/ControlPanel.kt       (PAUSED 隐藏重选)
+app/src/main/java/com/example/stepshift/root/RootShellExecutor.kt           (stderr 合流 + 严格检测)
+app/src/test/java/com/example/stepshift/CoordinateTransformTest.kt          (新增单测)
+```

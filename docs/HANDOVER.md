@@ -153,6 +153,6 @@ adb logcat -s StepShift:* MockForegroundService:* OsmDroid:* StepShiftHealth:*
 
 ## 7. 相关开发文档索引
 - **[docs/PLAN.md](file:///D:/Data/Development/StepShift/docs/PLAN.md)**：记录整体架构设计、数学动力学公式、数据流图与全部 M1~M10 里程碑完成进度。
-- **[docs/PROBLEM.md](file:///D:/Data/Development/StepShift/docs/PROBLEM.md)**：详细记录 11 大关键技术难点排查、Android 14/15/16 避坑记录与解决方案。
-- **[docs/Kimi.md](file:///D:/Data/Development/StepShift/docs/Kimi.md)**：2026-08-17 UI 深度优化交接文档，记录全部 UI Bug 修复明细、性能优化与后续建议。
+- **[docs/PROBLEM.md](file:///D:/Data/Development/StepShift/docs/PROBLEM.md)**：详细记录 12 大关键技术难点排查、Android 14/15/16 避坑记录与解决方案。
+- **[docs/Kimi.md](file:///D:/Data/Development/StepShift/docs/Kimi.md)**：Kimi 优化交接文档——第一轮 UI 修复、第二轮面板折叠/贴底、第三轮功能级修复（坐标基准/WakeLock 释放/运行守卫/Root 执行器等），含真机验证明细。
 - **[docs/HANDOVER.md](file:///D:/Data/Development/StepShift/docs/HANDOVER.md)**：即本文档，供后续开发者、运维人员快速交接与全流程部署使用。

@@ -17,6 +17,9 @@
 2. **命令结束标记（Sentinel Token）**：每次向 `su` 发送命令后，附带写入 `echo "__CMD_FINISHED__:$?"`。
 3. **独立后台协程/线程监听流**：在独立调度器中持续消费输出流，直到捕获到特定标记即可准确判断命令退出码与结果，无需反复重启进程。
 4. **异常自愈机制**：当出现管道破裂（Broken Pipe）或超时时，自动清理旧进程并重新建立连接。
+5. **stderr 合流消费（2026-08-17 修正）**：`ProcessBuilder.redirectErrorStream(true)` 将 stderr 并入 stdout 一并读取。此前实现单独持有 `errorReader` 但从未消费，命令大量输出 stderr 时仍会填满管道缓冲区导致 su 死锁。
+
+> 注：Root 检测以 `id` 输出含 `uid=0` 为唯一判据；不能以"退出码为 0"兜底——部分 ROM 在 su 被拒后会以 shell 身份执行命令，退出码同样为 0。
 
 ---
 
@@ -33,6 +36,28 @@
 1. **类型双重声明**：在清单中声明 `android:foregroundServiceType="location|specialUse|health"`，并在 `Service` 启动时携带类型标志位。
 2. **持有 Partial WakeLock**：在 Service 启动时获取 `PowerManager.PARTIAL_WAKE_LOCK`，保持 CPU 核心在熄屏下正常运行，并在服务销毁时安全释放。
 3. **前台通知高频刷新策略**：采用节流（Throttled）更新，避免每秒调用 `notify()` 触发系统 NotificationManager 速率限制（Rate Limiting）。
+
+> 2026-08-17 修正：节流此前只停留在设计描述，实现是每 1Hz tick 全量 `notify()`。现已补齐——`NotificationHelper.updateNotification` 在状态切换时立即更新，普通数据 tick 最小间隔 2s。
+
+---
+
+## 12. 高德瓦片坐标基准（Datum）因源而异 —— wprd 无偏移、webst/webrd 是 GCJ-02
+
+### 问题背景
+国内地图瓦片通常被认为是 GCJ-02 火星坐标，但高德直连瓦片**并非铁板一块**：
+- `wprd01~04.is.autonavi.com/appmaptile?style=7`（矢量街道）：社区公认的 **WGS-84 无偏移**源，OSM 系应用可直接使用；
+- `webst01~04.is.autonavi.com/appmaptile?style=6`（卫星影像）与 `webrd0x`（style=8 矢量）：**GCJ-02 偏移**源，北京实测偏移约 556m（北 156m + 东 533m）。
+
+本项目曾因统一按 WGS-84 裸坐标绘制，导致**卫星图层下路线/Marker 整体偏移约 556m、点选取址与实际注入位置偏差数百米**；而矢量图层反而一直是准的。
+
+### 解决方案（按瓦片源分别投影）
+1. `TileSourceManager` 每个源携带 `isGcj02` 基准标记；
+2. 显示链路（路线折线/起终 Marker/行走者/视角居中与追踪）：WGS-84 → `CoordinateTransform.wgs84ToGcj02` → 再上屏；
+3. 点选链路：屏幕坐标 → `gcj02ToWgs84` 反投影 → 才进入 OSRM 规划与 GPS 注入；
+4. 切换瓦片源时强制重建全部 overlay，按新基准重新投影；
+5. 业务逻辑、引擎、网络、注入层**永远只接触 WGS-84**，转换只发生在地图显示边界。
+
+> 验证坐标基准最可靠的方式不是查资料，而是真机对照：同一坐标在转换前后各截一张图，观察地物是否落在预期位置（本次即借此纠正了"矢量图也偏移"的误判）。
 
 ---
 

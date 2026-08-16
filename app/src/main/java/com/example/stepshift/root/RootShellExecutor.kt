@@ -25,7 +25,6 @@ class RootShellExecutor private constructor() {
     private var suProcess: Process? = null
     private var writer: BufferedWriter? = null
     private var reader: BufferedReader? = null
-    private var errorReader: BufferedReader? = null
     private val isExecuting = AtomicBoolean(false)
 
     @Synchronized
@@ -43,13 +42,14 @@ class RootShellExecutor private constructor() {
         }
 
         return try {
+            // stderr is merged into stdout: a separate error stream that is never
+            // drained can fill its pipe buffer and deadlock the whole su process.
             val process = ProcessBuilder("su")
-                .redirectErrorStream(false)
+                .redirectErrorStream(true)
                 .start()
             suProcess = process
             writer = BufferedWriter(OutputStreamWriter(process.outputStream))
             reader = BufferedReader(InputStreamReader(process.inputStream))
-            errorReader = BufferedReader(InputStreamReader(process.errorStream))
             true
         } catch (e: Exception) {
             destroyShell()
@@ -62,23 +62,23 @@ class RootShellExecutor private constructor() {
         try {
             writer?.close()
             reader?.close()
-            errorReader?.close()
             suProcess?.destroy()
         } catch (ignored: Exception) {
         } finally {
             writer = null
             reader = null
-            errorReader = null
             suProcess = null
         }
     }
 
     /**
      * Test whether device has root (su) access.
+     * Strict check: only uid=0 counts — a successful non-root `id` (e.g. su denied
+     * but executed as shell on some ROMs) must NOT be reported as root.
      */
     suspend fun isRootAvailable(): Boolean = withContext(Dispatchers.IO) {
         val res = execute("id")
-        res.isSuccess && (res.stdout.any { it.contains("uid=0(root)") } || res.exitCode == 0)
+        res.isSuccess && res.stdout.any { it.contains("uid=0") }
     }
 
     /**

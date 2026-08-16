@@ -48,7 +48,12 @@ class NotificationHelper(private val context: Context) {
         )
 
         val isRunning = snapshot.status == SimulationStatus.RUNNING
-        val title = if (isRunning) "StepShift 正在运动仿真中..." else "StepShift 仿真已暂停"
+        val title = when (snapshot.status) {
+            SimulationStatus.RUNNING -> "StepShift 正在运动仿真中..."
+            SimulationStatus.PAUSED -> "StepShift 仿真已暂停"
+            SimulationStatus.COMPLETED -> "StepShift 仿真已完成 ✅"
+            SimulationStatus.IDLE -> "StepShift 待命中"
+        }
 
         val distanceKm = "%.2f km".format(snapshot.totalDistanceMeters / 1000.0)
         val speedStr = "%.1f km/h".format(snapshot.speedKmH)
@@ -61,11 +66,11 @@ class NotificationHelper(private val context: Context) {
             .setSubText(subText)
             .setSmallIcon(android.R.drawable.ic_dialog_map)
             .setContentIntent(openAppPendingIntent)
-            .setOngoing(isRunning)
+            .setOngoing(isRunning || snapshot.status == SimulationStatus.PAUSED)
             .setOnlyAlertOnce(true)
             .setProgress(100, (snapshot.progressPercent * 100).toInt(), false)
 
-        // Action 1: Pause or Resume
+        // Action 1: Pause (running) or Resume (paused) — hidden in terminal states
         if (isRunning) {
             val pauseIntent = Intent(context, MockForegroundService::class.java).apply {
                 action = MockForegroundService.ACTION_PAUSE
@@ -77,7 +82,7 @@ class NotificationHelper(private val context: Context) {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             builder.addAction(android.R.drawable.ic_media_pause, "暂停", pausePending)
-        } else {
+        } else if (snapshot.status == SimulationStatus.PAUSED) {
             val resumeIntent = Intent(context, MockForegroundService::class.java).apply {
                 action = MockForegroundService.ACTION_RESUME
             }
@@ -90,22 +95,37 @@ class NotificationHelper(private val context: Context) {
             builder.addAction(android.R.drawable.ic_media_play, "继续", resumePending)
         }
 
-        // Action 2: Stop
-        val stopIntent = Intent(context, MockForegroundService::class.java).apply {
-            action = MockForegroundService.ACTION_STOP
+        // Action 2: Stop (only meaningful while a run is active)
+        if (isRunning || snapshot.status == SimulationStatus.PAUSED) {
+            val stopIntent = Intent(context, MockForegroundService::class.java).apply {
+                action = MockForegroundService.ACTION_STOP
+            }
+            val stopPending = PendingIntent.getService(
+                context,
+                3,
+                stopIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "结束", stopPending)
         }
-        val stopPending = PendingIntent.getService(
-            context,
-            3,
-            stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "结束", stopPending)
 
         return builder.build()
     }
 
+    private var lastNotifyAtMs = 0L
+    private var lastNotifyStatus: SimulationStatus? = null
+
+    /**
+     * Throttled update: status transitions post immediately; plain telemetry ticks
+     * post at most once every 2 seconds to stay clear of NotificationManager /
+     * SystemUI rate limiting on some ROMs.
+     */
     fun updateNotification(snapshot: SimulationSnapshot) {
+        val now = System.currentTimeMillis()
+        val statusChanged = snapshot.status != lastNotifyStatus
+        if (!statusChanged && now - lastNotifyAtMs < 2000L) return
+        lastNotifyAtMs = now
+        lastNotifyStatus = snapshot.status
         val notification = buildNotification(snapshot)
         notificationManager.notify(NOTIFICATION_ID, notification)
     }

@@ -224,7 +224,7 @@ fun StepShiftApp(
                 onPauseClick = { viewModel.pauseSimulation() },
                 onResumeClick = { viewModel.resumeSimulation() },
                 onStopClick = { viewModel.stopSimulation(context) },
-                onClearRouteClick = { viewModel.clearRoute() },
+                onClearRouteClick = { viewModel.clearRoute(context) },
                 onSpeedChange = { viewModel.updateSpeed(it) },
                 onGpsDriftToggle = { viewModel.updateGpsDrift(it) }
             )

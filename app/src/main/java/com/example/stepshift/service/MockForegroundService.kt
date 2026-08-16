@@ -71,7 +71,12 @@ class MockForegroundService : Service() {
                     snapshot
                 )
                 if (snapshot.status == SimulationStatus.COMPLETED) {
-                    // Simulation finished
+                    // Simulation finished: drop the wake lock so the CPU can sleep, and
+                    // detach from foreground (notification stays as a final summary card).
+                    // A started-but-non-foreground service may be killed freely — nothing
+                    // of value is lost once the run is complete.
+                    releaseWakeLock()
+                    stopForeground(STOP_FOREGROUND_DETACH)
                 }
             }
         }
@@ -82,6 +87,9 @@ class MockForegroundService : Service() {
 
         when (action) {
             ACTION_START -> {
+                // Re-acquire in case this is a restart after COMPLETED released the lock
+                acquireWakeLock()
+                rootMock.setupTestProviders(this)
                 val initialNotification = notificationHelper.buildNotification(engine.snapshot.value)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(

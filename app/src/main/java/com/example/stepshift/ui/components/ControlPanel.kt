@@ -163,7 +163,7 @@ fun ControlPanel(
                         )
                     }
 
-                    if (routeResult != null && !isRunning) {
+                    if (routeResult != null && !isRunning && !isPaused) {
                         TextButton(
                             onClick = onClearRouteClick,
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
