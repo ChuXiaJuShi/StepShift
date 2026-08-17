@@ -68,14 +68,26 @@ class MockForegroundService : Service() {
         }
     }
 
+    /** True while the 1Hz fixed-point injection owns the foreground notification. */
+    private val isFixedMode: Boolean
+        get() = fixedJob?.isActive == true
+
     private fun observeEngineState() {
         serviceScope.launch {
             engine.snapshot.collectLatest { snapshot ->
-                notificationHelper.updateNotification(snapshot)
-                com.example.stepshift.health.HealthDataManager.instance.dispatchMotionUpdate(
-                    this@MockForegroundService,
-                    snapshot
-                )
+                // A1: while the fixed-point injection is active it owns NOTIFICATION_ID —
+                // engine telemetry (IDLE planning ticks etc.) must not overwrite it.
+                if (!isFixedMode) {
+                    notificationHelper.updateNotification(snapshot)
+                }
+                // N1: only broadcast health data for a live/finished run. IDLE planning
+                // ticks carry steps=0 and would clobber any standalone step override.
+                if (snapshot.status == SimulationStatus.RUNNING || snapshot.status == SimulationStatus.COMPLETED) {
+                    com.example.stepshift.health.HealthDataManager.instance.dispatchMotionUpdate(
+                        this@MockForegroundService,
+                        snapshot
+                    )
+                }
                 if (snapshot.status == SimulationStatus.COMPLETED) {
                     // Simulation finished: drop the wake lock so the CPU can sleep, and
                     // detach from foreground (notification stays as a final summary card).
@@ -89,7 +101,10 @@ class MockForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action ?: ACTION_START
+        // A4: do NOT restart sticky — a killed injection service must stay dead.
+        // A null-intent restart would fall into ACTION_START with no route, leaving
+        // an orphaned foreground service holding a wake lock.
+        val action = intent?.action ?: return START_NOT_STICKY
 
         when (action) {
             ACTION_START -> {
@@ -126,12 +141,12 @@ class MockForegroundService : Service() {
                 val lat = intent?.getDoubleExtra(EXTRA_FIXED_LAT, Double.NaN) ?: Double.NaN
                 val lon = intent?.getDoubleExtra(EXTRA_FIXED_LON, Double.NaN) ?: Double.NaN
                 val alt = intent?.getDoubleExtra(EXTRA_FIXED_ALT, 0.0) ?: 0.0
-                if (lat.isNaN() || lon.isNaN()) return START_STICKY
+                if (lat.isNaN() || lon.isNaN()) return START_NOT_STICKY
 
                 // Never let the fixed point fight the route engine
                 val engineStatus = engine.snapshot.value.status
                 if (engineStatus == SimulationStatus.RUNNING || engineStatus == SimulationStatus.PAUSED) {
-                    return START_STICKY
+                    return START_NOT_STICKY
                 }
 
                 acquireWakeLock()
@@ -150,16 +165,18 @@ class MockForegroundService : Service() {
             }
             ACTION_FIXED_STOP -> {
                 stopFixedTicker()
-                rootMock.removeTestProviders(this)
+                // A3: check the engine BEFORE touching providers — removing the test
+                // providers while a route simulation runs would cut its GPS injection.
                 val engineStatus = engine.snapshot.value.status
                 if (engineStatus != SimulationStatus.RUNNING && engineStatus != SimulationStatus.PAUSED) {
+                    rootMock.removeTestProviders(this)
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }
             }
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     /**

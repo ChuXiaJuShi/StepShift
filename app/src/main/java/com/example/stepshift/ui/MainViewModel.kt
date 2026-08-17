@@ -127,6 +127,20 @@ class MainViewModel(
 
     init {
         checkRootAccess()
+        // B2: when a route simulation completes, adopt the finish point as the new
+        // standalone virtual position (and persist it) so nothing "jumps back".
+        viewModelScope.launch {
+            var prevStatus = snapshot.value.status
+            snapshot.collect { snap ->
+                if (snap.status == SimulationStatus.COMPLETED && prevStatus != SimulationStatus.COMPLETED) {
+                    snap.currentPoint?.let { p ->
+                        _mockLocation.value = p
+                        persistOverrideState()
+                    }
+                }
+                prevStatus = snap.status
+            }
+        }
     }
 
     fun checkRootAccess() {
@@ -167,10 +181,17 @@ class MainViewModel(
         appContext = context.applicationContext
 
         val prefs = appContext!!.getSharedPreferences(OVERRIDE_PREFS_NAME, Context.MODE_PRIVATE)
-        val savedLat = prefs.getFloat(PREF_MOCK_LAT, Float.NaN).toDouble()
-        val savedLon = prefs.getFloat(PREF_MOCK_LON, Float.NaN).toDouble()
-        if (!savedLat.isNaN() && !savedLon.isNaN()) {
-            _mockLocation.value = GeoPoint(savedLat, savedLon, prefs.getFloat(PREF_MOCK_ALT, 0f).toDouble())
+        // B1: coordinates persist as String (Double-exact); legacy Float entries are
+        // still readable (~1m quantization) and get upgraded on the next write.
+        fun readCoord(key: String): Double? = when (val v = prefs.all[key]) {
+            is String -> v.toDoubleOrNull()
+            is Float -> v.toDouble()
+            else -> null
+        }
+        val savedLat = readCoord(PREF_MOCK_LAT)
+        val savedLon = readCoord(PREF_MOCK_LON)
+        if (savedLat != null && savedLon != null) {
+            _mockLocation.value = GeoPoint(savedLat, savedLon, readCoord(PREF_MOCK_ALT) ?: 0.0)
         }
         _overrideSteps.value = if (prefs.contains(PREF_OVERRIDE_STEPS)) prefs.getLong(PREF_OVERRIDE_STEPS, 0L) else null
         _isFixedInjectEnabled.value = prefs.getBoolean(PREF_FIXED_INJECT, false)
@@ -200,9 +221,9 @@ class MainViewModel(
         val editor = prefs.edit()
         val mock = _mockLocation.value
         if (mock != null) {
-            editor.putFloat(PREF_MOCK_LAT, mock.latitude.toFloat())
-            editor.putFloat(PREF_MOCK_LON, mock.longitude.toFloat())
-            editor.putFloat(PREF_MOCK_ALT, mock.altitude.toFloat())
+            editor.putString(PREF_MOCK_LAT, mock.latitude.toString())
+            editor.putString(PREF_MOCK_LON, mock.longitude.toString())
+            editor.putString(PREF_MOCK_ALT, mock.altitude.toString())
         } else {
             editor.remove(PREF_MOCK_LAT).remove(PREF_MOCK_LON).remove(PREF_MOCK_ALT)
         }
@@ -325,8 +346,10 @@ class MainViewModel(
         if (_mockLocation.value == null) {
             _mockLocation.value = point
             persistOverrideState()
-            if (!silent) {
-                viewModelScope.launch {
+            // B3: center the map so the user can actually see the adopted position
+            viewModelScope.launch {
+                _mapCenterEvent.emit(point)
+                if (!silent) {
                     _toastMessage.emit("虚拟位置已初始化为当前真实位置")
                 }
             }
@@ -373,6 +396,13 @@ class MainViewModel(
                 viewModelScope.launch { _toastMessage.emit("仿真运行中，虚拟位置由路线驱动") }
                 return
             }
+            // B5: without Root/mock privilege the injection fails silently — refuse
+            // to flip the switch and tell the user what to do instead.
+            if (isRootAvailable.value != true) {
+                viewModelScope.launch { _toastMessage.emit("未获取 Root 权限，请先点顶部徽标一键赋权") }
+                checkRootAccess()
+                return
+            }
             val point = _mockLocation.value ?: run {
                 viewModelScope.launch { _toastMessage.emit("请先设置虚拟位置，再开启定点注入") }
                 return
@@ -395,6 +425,8 @@ class MainViewModel(
         _overrideSteps.value = steps
         persistOverrideState()
         viewModelScope.launch {
+            // Feedback first — the multi-pulse + root boost runs in the background (C1)
+            _toastMessage.emit("已推送虚拟步数: $steps 步")
             val ctx = appContext
             if (ctx != null) {
                 // Multiple pulses: some health apps only sample the counter on screen-on
@@ -410,7 +442,16 @@ class MainViewModel(
                         "--ei step_count ${steps.coerceAtMost(Int.MAX_VALUE.toLong())} " +
                         "--el step_timestamp ${System.currentTimeMillis()}"
             )
-            _toastMessage.emit("已推送虚拟步数: $steps 步")
+        }
+    }
+
+    /** Leave SET_MOCK map-pick mode without choosing a point — restores the route flow. */
+    fun cancelMockSelection() {
+        if (_selectionMode.value != SelectionMode.SET_MOCK) return
+        _selectionMode.value = when {
+            _routeResult.value != null -> SelectionMode.NONE
+            _startPoint.value != null -> SelectionMode.SET_END
+            else -> SelectionMode.SET_START
         }
     }
 
@@ -490,6 +531,20 @@ class MainViewModel(
     @SuppressLint("MissingPermission")
     fun fetchAndCenterDeviceLocation(context: Context) {
         viewModelScope.launch {
+            // A2: while the fixed-point injection owns the system location, every
+            // lastKnown/GPS read returns OUR OWN mock point — never treat it as the
+            // real device position. Just center onto the virtual position instead.
+            if (_isFixedInjectEnabled.value) {
+                val mock = _mockLocation.value
+                if (mock != null) {
+                    _mapCenterEvent.emit(mock)
+                    _toastMessage.emit("定点注入中，已居中到虚拟位置")
+                } else {
+                    _toastMessage.emit("定点注入中，真实定位读取已停用")
+                }
+                return@launch
+            }
+
             // 1. If currently in simulation (running, paused, or completed), center directly on the active mock point!
             val simPoint = snapshot.value.currentPoint
             if (simPoint != null && snapshot.value.status != SimulationStatus.IDLE) {

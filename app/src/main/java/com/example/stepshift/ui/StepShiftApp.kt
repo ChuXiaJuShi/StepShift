@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -53,6 +54,7 @@ fun StepShiftApp(
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showStepOverrideDialog by remember { mutableStateOf(false) }
     var showLocationOverrideDialog by remember { mutableStateOf(false) }
+    var isOverrideCardExpanded by rememberSaveable { mutableStateOf(true) }
 
     // Standalone override state (independent step / location spoofing)
     val sensorSteps by viewModel.sensorSteps.collectAsState()
@@ -230,6 +232,8 @@ fun StepShiftApp(
                             mockLocation = viewModel.effectiveMockLocation,
                             isFixedInjectEnabled = isFixedInjectEnabled,
                             isSimulating = isSimulating,
+                            isExpanded = isOverrideCardExpanded,
+                            onToggleExpand = { isOverrideCardExpanded = !isOverrideCardExpanded },
                             onEditSteps = { showStepOverrideDialog = true },
                             onEditLocation = { showLocationOverrideDialog = true }
                         )
@@ -263,7 +267,8 @@ fun StepShiftApp(
                 onStopClick = { viewModel.stopSimulation(context) },
                 onClearRouteClick = { viewModel.clearRoute(context) },
                 onSpeedChange = { viewModel.updateSpeed(it) },
-                onGpsDriftToggle = { viewModel.updateGpsDrift(it) }
+                onGpsDriftToggle = { viewModel.updateGpsDrift(it) },
+                onCancelMockPick = { viewModel.cancelMockSelection() }
             )
         }
     }

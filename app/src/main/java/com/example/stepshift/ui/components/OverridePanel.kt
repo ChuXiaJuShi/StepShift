@@ -1,5 +1,6 @@
 package com.example.stepshift.ui.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,8 +23,10 @@ import com.example.stepshift.model.GeoPoint
 
 /**
  * Compact always-on status card for the standalone override subsystem:
- *  - row 1: real device step counter (+ virtual steps chip) with an edit button
- *  - row 2: real position -> virtual position with an edit button
+ *  - expanded: row 1 = real sensor steps (+ virtual chip) + edit; row 2 = virtual
+ *    position (+ injecting chip) + edit
+ *  - collapsed: a single slim summary row (keeps the map visible, e.g. while a
+ *    simulation dashboard is also on screen)
  */
 @Composable
 fun OverrideStatusCard(
@@ -34,6 +37,8 @@ fun OverrideStatusCard(
     mockLocation: GeoPoint?,
     isFixedInjectEnabled: Boolean,
     isSimulating: Boolean,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
     onEditSteps: () -> Unit,
     onEditLocation: () -> Unit
 ) {
@@ -49,6 +54,74 @@ fun OverrideStatusCard(
             MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
         )
     ) {
+        if (!isExpanded) {
+            // Collapsed: one slim summary row, tap anywhere to expand
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleExpand() }
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DirectionsWalk,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.secondary
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = sensorSteps?.let { "%,d".format(it) } ?: "--",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (overrideSteps != null) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "→虚拟 %,d".format(overrideSteps),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Icon(
+                    imageVector = Icons.Default.LocationOn,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = if (isFixedInjectEnabled) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = when {
+                        isSimulating -> "仿真驱动中"
+                        mockLocation != null -> "%.3f, %.3f".format(mockLocation.latitude, mockLocation.longitude) +
+                                if (isFixedInjectEnabled) " · 注入中" else ""
+                        else -> "未设置虚拟位置"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isSimulating || mockLocation != null) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.error,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = "展开",
+                    modifier = Modifier
+                        .size(20.dp)
+                        .padding(2.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // whole collapsed bar toggles
+            return@Surface
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -157,6 +230,15 @@ fun OverrideStatusCard(
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 CompactEditButton(onClick = onEditLocation, label = "改定位")
+                Spacer(modifier = Modifier.width(2.dp))
+                IconButton(onClick = onToggleExpand, modifier = Modifier.size(26.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowUp,
+                        contentDescription = "收起",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }

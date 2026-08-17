@@ -40,7 +40,8 @@ fun ControlPanel(
     onStopClick: () -> Unit,
     onClearRouteClick: () -> Unit,
     onSpeedChange: (Double) -> Unit,
-    onGpsDriftToggle: (Boolean) -> Unit
+    onGpsDriftToggle: (Boolean) -> Unit,
+    onCancelMockPick: () -> Unit = {}
 ) {
     val isRunning = snapshot.status == SimulationStatus.RUNNING
     val isPaused = snapshot.status == SimulationStatus.PAUSED
@@ -86,11 +87,17 @@ fun ControlPanel(
             // Status strip — always visible; the whole strip toggles expand/collapse.
             // When collapsed it also carries compact action buttons so the panel can
             // shrink to a single slim row without losing control of the simulation.
+            // In SET_MOCK mode the strip highlights and the mock hint takes
+            // precedence over any route status — the next map tap moves the virtual position.
+            val isMockPicking = selectionMode == SelectionMode.SET_MOCK
             Surface(
                 onClick = onToggleExpand,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+                color = if (isMockPicking)
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f)
+                else
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
             ) {
                 Row(
                     modifier = Modifier
@@ -103,7 +110,21 @@ fun ControlPanel(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (isLoadingRoute) {
+                        if (isMockPicking) {
+                            Icon(
+                                imageVector = Icons.Default.MyLocation,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "请点击地图设置【虚拟位置】",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else if (isLoadingRoute) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
                                 strokeWidth = 2.dp,
@@ -149,6 +170,15 @@ fun ControlPanel(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                        }
+                    }
+
+                    if (isMockPicking) {
+                        TextButton(
+                            onClick = onCancelMockPick,
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(text = "取消", style = MaterialTheme.typography.labelSmall)
                         }
                     }
 
