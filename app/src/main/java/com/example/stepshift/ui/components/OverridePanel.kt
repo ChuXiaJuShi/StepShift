@@ -367,7 +367,7 @@ fun StepOverrideDialog(
                 )
 
                 Text(
-                    text = "应用后将通过微信运动/标准计步兼容广播推送该数值，无需开始路线仿真。",
+                    text = "应用后将写入系统 Health Connect（步数页可见）并同步微信运动/标准计步兼容广播，无需开始路线仿真。\n首次使用请在系统「Health Connect → 数据管理 → 数据源和优先级」中添加 StepShift，否则系统总计不显示本数据。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

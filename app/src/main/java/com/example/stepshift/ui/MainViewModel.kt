@@ -12,6 +12,7 @@ import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.stepshift.engine.SimulationEngine
+import com.example.stepshift.health.HealthConnectWriter
 import com.example.stepshift.health.HealthDataManager
 import com.example.stepshift.model.*
 import com.example.stepshift.network.GeocodingApiClient
@@ -38,7 +39,8 @@ class MainViewModel(
     private val geocodingClient: GeocodingApiClient = GeocodingApiClient(),
     private val rootExecutor: RootShellExecutor = RootShellExecutor.instance,
     private val rootMock: RootLocationMock = RootLocationMock.instance,
-    private val healthManager: HealthDataManager = HealthDataManager.instance
+    private val healthManager: HealthDataManager = HealthDataManager.instance,
+    private val healthConnectWriter: HealthConnectWriter = HealthConnectWriter.instance
 ) : ViewModel() {
 
     val snapshot: StateFlow<SimulationSnapshot> = engine.snapshot
@@ -205,6 +207,9 @@ class MainViewModel(
                 healthManager.dispatchStepOverride(appContext!!, steps)
                 delay(1500L)
                 healthManager.dispatchStepOverride(appContext!!, steps)
+                // HC records are date-scoped: re-write for the new day after rollover
+                ensureHealthConnectPermission()
+                healthConnectWriter.applySteps(appContext!!, steps)
             }
             // Resume fixed-point injection from the previous session
             if (_isFixedInjectEnabled.value && _mockLocation.value != null &&
@@ -213,6 +218,15 @@ class MainViewModel(
                 MockForegroundService.startFixedService(appContext!!, _mockLocation.value!!)
             }
         }
+    }
+
+    /** Try to ensure the Health Connect WRITE_STEPS grant (Root pm grant fallback). */
+    private suspend fun ensureHealthConnectPermission(): Boolean {
+        val ctx = appContext ?: return false
+        if (healthConnectWriter.hasWritePermission(ctx)) return true
+        // Attempt the privileged grant path (works via Root); then re-check once.
+        rootExecutor.execute("pm grant ${ctx.packageName} android.permission.health.WRITE_STEPS")
+        return healthConnectWriter.hasWritePermission(ctx)
     }
 
     private fun persistOverrideState() {
@@ -442,6 +456,18 @@ class MainViewModel(
                         "--ei step_count ${steps.coerceAtMost(Int.MAX_VALUE.toLong())} " +
                         "--el step_timestamp ${System.currentTimeMillis()}"
             )
+            // The effective channel: write into Health Connect so the system health
+            // dashboard and HC-reading apps actually see the overridden steps.
+            if (ctx != null) {
+                if (ensureHealthConnectPermission()) {
+                    val ok = healthConnectWriter.applySteps(ctx, steps)
+                    if (!ok) {
+                        _toastMessage.emit("Health Connect 步数写入失败")
+                    }
+                } else {
+                    _toastMessage.emit("未获得 Health Connect 写入权限，步数仅通过广播推送")
+                }
+            }
         }
     }
 
@@ -458,7 +484,10 @@ class MainViewModel(
     fun clearStepOverride() {
         _overrideSteps.value = null
         persistOverrideState()
-        viewModelScope.launch { _toastMessage.emit("已清除虚拟步数") }
+        viewModelScope.launch {
+            appContext?.let { healthConnectWriter.clearSteps(it) }
+            _toastMessage.emit("已清除虚拟步数")
+        }
     }
 
     fun toggleControlPanel() {
