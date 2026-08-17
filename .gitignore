@@ -13,3 +13,7 @@ local.properties
 *.apk
 *.ap_
 *.dex
+
+# Internal handover/design docs — keep local only, never push to GitHub
+/docs/
+/GLM.md

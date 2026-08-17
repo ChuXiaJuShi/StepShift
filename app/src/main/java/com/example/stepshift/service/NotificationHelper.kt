@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.example.stepshift.MainActivity
+import com.example.stepshift.model.GeoPoint
 import com.example.stepshift.model.SimulationSnapshot
 import com.example.stepshift.model.SimulationStatus
 
@@ -128,6 +129,52 @@ class NotificationHelper(private val context: Context) {
         lastNotifyStatus = snapshot.status
         val notification = buildNotification(snapshot)
         notificationManager.notify(NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * Notification shown while the standalone fixed-point injection is active
+     * (virtual position locked, no route simulation running).
+     */
+    fun buildFixedPointNotification(point: GeoPoint): Notification {
+        val openAppIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openAppPendingIntent = PendingIntent.getActivity(
+            context,
+            0,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val stopIntent = Intent(context, MockForegroundService::class.java).apply {
+            action = MockForegroundService.ACTION_FIXED_STOP
+        }
+        val stopPending = PendingIntent.getService(
+            context,
+            4,
+            stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle("StepShift 定点位置注入中...")
+            .setContentText("虚拟位置已锁定: %.5f, %.5f".format(point.latitude, point.longitude))
+            .setSmallIcon(android.R.drawable.ic_dialog_map)
+            .setContentIntent(openAppPendingIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "结束", stopPending)
+            .build()
+    }
+
+    private var lastFixedNotifyAtMs = 0L
+
+    /** Throttled 1Hz fixed-point tick update (at most one post every 5 seconds). */
+    fun notifyFixedPoint(point: GeoPoint) {
+        val now = System.currentTimeMillis()
+        if (now - lastFixedNotifyAtMs < 5000L) return
+        lastFixedNotifyAtMs = now
+        notificationManager.notify(NOTIFICATION_ID, buildFixedPointNotification(point))
     }
 
     companion object {

@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import com.example.stepshift.engine.SimulationEngine
+import com.example.stepshift.model.GeoPoint
 import com.example.stepshift.model.SimulationStatus
 import com.example.stepshift.root.RootLocationMock
 import kotlinx.coroutines.*
@@ -15,6 +16,9 @@ import kotlinx.coroutines.flow.collectLatest
 
 /**
  * Background keep-alive service holding a Partial WakeLock and managing location mock stream.
+ * Supports two mutually exclusive driving modes:
+ *  - Route simulation (engine 1Hz ticks, ACTION_START)
+ *  - Fixed-point injection (standalone virtual position, ACTION_FIXED_START)
  */
 class MockForegroundService : Service() {
 
@@ -24,6 +28,8 @@ class MockForegroundService : Service() {
 
     private val engine = SimulationEngine.instance
     private val rootMock = RootLocationMock.instance
+
+    private var fixedJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -87,6 +93,8 @@ class MockForegroundService : Service() {
 
         when (action) {
             ACTION_START -> {
+                // The route engine takes priority — cancel any fixed-point injection
+                stopFixedTicker()
                 // Re-acquire in case this is a restart after COMPLETED released the lock
                 acquireWakeLock()
                 rootMock.setupTestProviders(this)
@@ -109,13 +117,74 @@ class MockForegroundService : Service() {
                 engine.resume()
             }
             ACTION_STOP -> {
+                stopFixedTicker()
                 engine.stop()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
+            ACTION_FIXED_START -> {
+                val lat = intent?.getDoubleExtra(EXTRA_FIXED_LAT, Double.NaN) ?: Double.NaN
+                val lon = intent?.getDoubleExtra(EXTRA_FIXED_LON, Double.NaN) ?: Double.NaN
+                val alt = intent?.getDoubleExtra(EXTRA_FIXED_ALT, 0.0) ?: 0.0
+                if (lat.isNaN() || lon.isNaN()) return START_STICKY
+
+                // Never let the fixed point fight the route engine
+                val engineStatus = engine.snapshot.value.status
+                if (engineStatus == SimulationStatus.RUNNING || engineStatus == SimulationStatus.PAUSED) {
+                    return START_STICKY
+                }
+
+                acquireWakeLock()
+                rootMock.setupTestProviders(this)
+                val notification = notificationHelper.buildFixedPointNotification(GeoPoint(lat, lon, alt))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        NotificationHelper.NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                    )
+                } else {
+                    startForeground(NotificationHelper.NOTIFICATION_ID, notification)
+                }
+                startFixedTicker(GeoPoint(lat, lon, alt))
+            }
+            ACTION_FIXED_STOP -> {
+                stopFixedTicker()
+                rootMock.removeTestProviders(this)
+                val engineStatus = engine.snapshot.value.status
+                if (engineStatus != SimulationStatus.RUNNING && engineStatus != SimulationStatus.PAUSED) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+            }
         }
 
         return START_STICKY
+    }
+
+    /**
+     * 1Hz fixed-point injection loop. Self-cancels if the route engine ever takes
+     * over the location stream (defensive guard — the ACTION_START path already
+     * stops the ticker explicitly).
+     */
+    private fun startFixedTicker(point: GeoPoint) {
+        stopFixedTicker()
+        fixedJob = serviceScope.launch {
+            while (isActive) {
+                val engineStatus = engine.snapshot.value.status
+                if (engineStatus == SimulationStatus.RUNNING || engineStatus == SimulationStatus.PAUSED) {
+                    break
+                }
+                rootMock.pushLocation(this@MockForegroundService, point, 0.0, 0f)
+                notificationHelper.notifyFixedPoint(point)
+                delay(1000L)
+            }
+        }
+    }
+
+    private fun stopFixedTicker() {
+        fixedJob?.cancel()
+        fixedJob = null
     }
 
     override fun onDestroy() {
@@ -133,6 +202,12 @@ class MockForegroundService : Service() {
         const val ACTION_PAUSE = "com.example.stepshift.ACTION_PAUSE"
         const val ACTION_RESUME = "com.example.stepshift.ACTION_RESUME"
         const val ACTION_STOP = "com.example.stepshift.ACTION_STOP"
+        const val ACTION_FIXED_START = "com.example.stepshift.ACTION_FIXED_START"
+        const val ACTION_FIXED_STOP = "com.example.stepshift.ACTION_FIXED_STOP"
+
+        private const val EXTRA_FIXED_LAT = "extra_fixed_lat"
+        private const val EXTRA_FIXED_LON = "extra_fixed_lon"
+        private const val EXTRA_FIXED_ALT = "extra_fixed_alt"
 
         fun startService(context: Context) {
             val intent = Intent(context, MockForegroundService::class.java).apply {
@@ -148,6 +223,29 @@ class MockForegroundService : Service() {
         fun stopService(context: Context) {
             val intent = Intent(context, MockForegroundService::class.java).apply {
                 action = ACTION_STOP
+            }
+            context.startService(intent)
+        }
+
+        /** Start (or restart with a new point) the standalone fixed-point injection. */
+        fun startFixedService(context: Context, point: GeoPoint) {
+            val intent = Intent(context, MockForegroundService::class.java).apply {
+                action = ACTION_FIXED_START
+                putExtra(EXTRA_FIXED_LAT, point.latitude)
+                putExtra(EXTRA_FIXED_LON, point.longitude)
+                putExtra(EXTRA_FIXED_ALT, point.altitude)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        /** Stop the fixed-point injection (route simulation, if any, keeps running). */
+        fun stopFixedService(context: Context) {
+            val intent = Intent(context, MockForegroundService::class.java).apply {
+                action = ACTION_FIXED_STOP
             }
             context.startService(intent)
         }

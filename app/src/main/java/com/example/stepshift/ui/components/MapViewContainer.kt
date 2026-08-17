@@ -44,6 +44,7 @@ fun MapViewContainer(
     endPoint: GeoPoint?,
     routeResult: RouteResult?,
     snapshot: SimulationSnapshot,
+    mockPoint: GeoPoint? = null,
     isTrackingEnabled: Boolean = true,
     centerEvent: SharedFlow<GeoPoint>? = null,
     onMapClick: (GeoPoint) -> Unit,
@@ -80,6 +81,7 @@ fun MapViewContainer(
     var startMarker by remember { mutableStateOf<Marker?>(null) }
     var endMarker by remember { mutableStateOf<Marker?>(null) }
     var walkerMarker by remember { mutableStateOf<Marker?>(null) }
+    var mockMarker by remember { mutableStateOf<Marker?>(null) }
     var routePolyline by remember { mutableStateOf<Polyline?>(null) }
     var routeUnderlay by remember { mutableStateOf<Polyline?>(null) }
 
@@ -88,12 +90,14 @@ fun MapViewContainer(
     var appliedRoute by remember { mutableStateOf<RouteResult?>(null) }
     var appliedStart by remember { mutableStateOf<GeoPoint?>(null) }
     var appliedEnd by remember { mutableStateOf<GeoPoint?>(null) }
+    var appliedMock by remember { mutableStateOf<GeoPoint?>(null) }
     var appliedBearingBucket by remember { mutableIntStateOf(Int.MIN_VALUE) }
     var appliedTileSourceIndex by remember { mutableIntStateOf(-1) }
 
     // Marker icons are immutable — create once instead of every recomposition.
     val startMarkerIcon = remember(context) { createCircleMarkerDrawable(ctx = context, colorHex = "#00E676", label = "起") }
     val endMarkerIcon = remember(context) { createCircleMarkerDrawable(ctx = context, colorHex = "#FF5252", label = "终") }
+    val mockMarkerIcon = remember(context) { createCircleMarkerDrawable(ctx = context, colorHex = "#7C4DFF", label = "虚") }
 
     // Default center = Tiananmen (WGS-84). The initial tile source (index 0) is the
     // WGS-84-aligned AMap vector endpoint, so no projection is needed here.
@@ -225,14 +229,17 @@ fun MapViewContainer(
                     startMarker?.let { mapView.overlays.remove(it) }
                     endMarker?.let { mapView.overlays.remove(it) }
                     walkerMarker?.let { mapView.overlays.remove(it) }
+                    mockMarker?.let { mapView.overlays.remove(it) }
                     routeUnderlay = null
                     routePolyline = null
                     startMarker = null
                     endMarker = null
                     walkerMarker = null
+                    mockMarker = null
                     appliedRoute = null
                     appliedStart = null
                     appliedEnd = null
+                    appliedMock = null
                     appliedBearingBucket = Int.MIN_VALUE
                     appliedTileSourceIndex = currentTileSourceIndex
                 }
@@ -275,6 +282,9 @@ fun MapViewContainer(
                     endMarker?.let { mapView.overlays.remove(it) }
                     endMarker = null
                     appliedEnd = if (endPoint == null) null else GeoPoint(Double.NaN, Double.NaN)
+                    mockMarker?.let { mapView.overlays.remove(it) }
+                    mockMarker = null
+                    appliedMock = if (mockPoint == null) null else GeoPoint(Double.NaN, Double.NaN)
                     walkerMarker?.let { mapView.overlays.remove(it) }
                     walkerMarker = null
                     appliedBearingBucket = Int.MIN_VALUE
@@ -312,6 +322,24 @@ fun MapViewContainer(
                         endMarker = marker
                     }
                     appliedEnd = endPoint
+                }
+
+                // 3.5 Standalone virtual position marker ("虚") — shown only while no
+                // route simulation is driving the walker marker, rebuilt on change.
+                if (mockPoint != appliedMock) {
+                    mockMarker?.let { mapView.overlays.remove(it) }
+                    mockMarker = null
+                    if (mockPoint != null) {
+                        val marker = Marker(mapView).apply {
+                            position = mockPoint.toMapGeoPoint()
+                            title = "虚拟位置 (定点)"
+                            icon = mockMarkerIcon
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        }
+                        mapView.overlays.add(marker)
+                        mockMarker = marker
+                    }
+                    appliedMock = mockPoint
                 }
 
                 // 4. Walker marker — updated in place; the icon bitmap is regenerated

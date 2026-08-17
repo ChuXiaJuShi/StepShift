@@ -2,12 +2,17 @@ package com.example.stepshift.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.stepshift.engine.SimulationEngine
+import com.example.stepshift.health.HealthDataManager
 import com.example.stepshift.model.*
 import com.example.stepshift.network.GeocodingApiClient
 import com.example.stepshift.network.OsrmApiClient
@@ -23,7 +28,8 @@ import kotlinx.coroutines.launch
 enum class SelectionMode {
     NONE,
     SET_START,
-    SET_END
+    SET_END,
+    SET_MOCK
 }
 
 class MainViewModel(
@@ -31,7 +37,8 @@ class MainViewModel(
     private val osrmClient: OsrmApiClient = OsrmApiClient(),
     private val geocodingClient: GeocodingApiClient = GeocodingApiClient(),
     private val rootExecutor: RootShellExecutor = RootShellExecutor.instance,
-    private val rootMock: RootLocationMock = RootLocationMock.instance
+    private val rootMock: RootLocationMock = RootLocationMock.instance,
+    private val healthManager: HealthDataManager = HealthDataManager.instance
 ) : ViewModel() {
 
     val snapshot: StateFlow<SimulationSnapshot> = engine.snapshot
@@ -71,6 +78,38 @@ class MainViewModel(
     private val _deviceLocation = MutableStateFlow<GeoPoint?>(null)
     val deviceLocation: StateFlow<GeoPoint?> = _deviceLocation.asStateFlow()
 
+    // ------------------------------------------------------------------
+    // Standalone override subsystem (independent step / location spoofing)
+    // ------------------------------------------------------------------
+
+    // Real cumulative steps reported by the hardware step-counter sensor
+    private val _sensorSteps = MutableStateFlow<Long?>(null)
+    val sensorSteps: StateFlow<Long?> = _sensorSteps.asStateFlow()
+
+    // Manually pushed virtual step count (persisted across launches)
+    private val _overrideSteps = MutableStateFlow<Long?>(null)
+    val overrideSteps: StateFlow<Long?> = _overrideSteps.asStateFlow()
+
+    // Standalone virtual position (persisted across launches; initialized from
+    // the real device position when no previous value exists)
+    private val _mockLocation = MutableStateFlow<GeoPoint?>(null)
+    val mockLocation: StateFlow<GeoPoint?> = _mockLocation.asStateFlow()
+
+    // Whether the fixed-point injection service is currently locking the
+    // system location onto the standalone virtual position
+    private val _isFixedInjectEnabled = MutableStateFlow(false)
+    val isFixedInjectEnabled: StateFlow<Boolean> = _isFixedInjectEnabled.asStateFlow()
+
+    private var appContext: Context? = null
+    private var stepSensorListener: SensorEventListener? = null
+
+    /** The virtual position currently visible to other apps: the engine point while a route simulation is live, otherwise the standalone mock point. */
+    val effectiveMockLocation: GeoPoint?
+        get() = snapshot.value.currentPoint?.takeIf {
+            snapshot.value.status == SimulationStatus.RUNNING ||
+                    snapshot.value.status == SimulationStatus.PAUSED
+        } ?: _mockLocation.value
+
     // Map Center Target Event
     private val _mapCenterEvent = MutableSharedFlow<GeoPoint>(replay = 1, extraBufferCapacity = 10)
     val mapCenterEvent: SharedFlow<GeoPoint> = _mapCenterEvent.asSharedFlow()
@@ -107,6 +146,278 @@ class MainViewModel(
                 _toastMessage.emit("Root 赋权完成 (部分指令已执行)")
             }
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Standalone override: initialization & persistence
+    // ------------------------------------------------------------------
+
+    /**
+     * One-shot bootstrap for the standalone override subsystem, invoked from the
+     * UI after the first composition:
+     * 1. restore the last virtual position / virtual steps / injection toggle;
+     * 2. start listening to the hardware step-counter sensor;
+     * 3. resolve the real device position — on very first launch (no persisted
+     *    virtual position) the real position becomes the initial virtual one;
+     * 4. re-push the persisted virtual steps and (optionally) resume the
+     *    fixed-point injection so the previous session's state is fully kept.
+     */
+    fun initializeOverride(context: Context) {
+        if (appContext != null) return
+        appContext = context.applicationContext
+
+        val prefs = appContext!!.getSharedPreferences(OVERRIDE_PREFS_NAME, Context.MODE_PRIVATE)
+        val savedLat = prefs.getFloat(PREF_MOCK_LAT, Float.NaN).toDouble()
+        val savedLon = prefs.getFloat(PREF_MOCK_LON, Float.NaN).toDouble()
+        if (!savedLat.isNaN() && !savedLon.isNaN()) {
+            _mockLocation.value = GeoPoint(savedLat, savedLon, prefs.getFloat(PREF_MOCK_ALT, 0f).toDouble())
+        }
+        _overrideSteps.value = if (prefs.contains(PREF_OVERRIDE_STEPS)) prefs.getLong(PREF_OVERRIDE_STEPS, 0L) else null
+        _isFixedInjectEnabled.value = prefs.getBoolean(PREF_FIXED_INJECT, false)
+
+        registerStepSensor()
+        refreshRealLocation(silent = true)
+
+        viewModelScope.launch {
+            // Re-push persisted virtual steps so other apps pick them up again
+            _overrideSteps.value?.let { steps ->
+                healthManager.dispatchStepOverride(appContext!!, steps)
+                delay(1500L)
+                healthManager.dispatchStepOverride(appContext!!, steps)
+            }
+            // Resume fixed-point injection from the previous session
+            if (_isFixedInjectEnabled.value && _mockLocation.value != null &&
+                snapshot.value.status == SimulationStatus.IDLE
+            ) {
+                MockForegroundService.startFixedService(appContext!!, _mockLocation.value!!)
+            }
+        }
+    }
+
+    private fun persistOverrideState() {
+        val ctx = appContext ?: return
+        val prefs = ctx.getSharedPreferences(OVERRIDE_PREFS_NAME, Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        val mock = _mockLocation.value
+        if (mock != null) {
+            editor.putFloat(PREF_MOCK_LAT, mock.latitude.toFloat())
+            editor.putFloat(PREF_MOCK_LON, mock.longitude.toFloat())
+            editor.putFloat(PREF_MOCK_ALT, mock.altitude.toFloat())
+        } else {
+            editor.remove(PREF_MOCK_LAT).remove(PREF_MOCK_LON).remove(PREF_MOCK_ALT)
+        }
+        val steps = _overrideSteps.value
+        if (steps != null) editor.putLong(PREF_OVERRIDE_STEPS, steps) else editor.remove(PREF_OVERRIDE_STEPS)
+        editor.putBoolean(PREF_FIXED_INJECT, _isFixedInjectEnabled.value)
+        editor.apply()
+    }
+
+    private fun registerStepSensor() {
+        val ctx = appContext ?: return
+        val sm = ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        val sensor = sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        if (sensor == null) {
+            _sensorSteps.value = null
+            return
+        }
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                if (event.sensor.type == Sensor.TYPE_STEP_COUNTER) {
+                    _sensorSteps.value = event.values.firstOrNull()?.toLong() ?: _sensorSteps.value
+                }
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
+        stepSensorListener = listener
+    }
+
+    private fun unregisterStepSensor() {
+        val ctx = appContext ?: return
+        val sm = ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        stepSensorListener?.let { sm.unregisterListener(it) }
+        stepSensorListener = null
+    }
+
+    /**
+     * Refresh the real device position. Skipped while a location source is being
+     * mocked (fixed injection active or route simulation live) — TestProvider
+     * locations would otherwise be mistaken for the real position.
+     */
+    @SuppressLint("MissingPermission")
+    fun refreshRealLocation(silent: Boolean = false) {
+        val ctx = appContext ?: return
+        if (_isFixedInjectEnabled.value) {
+            if (!silent) viewModelScope.launch { _toastMessage.emit("定点注入开启中，真实定位已暂停读取") }
+            return
+        }
+        if (snapshot.value.status == SimulationStatus.RUNNING || snapshot.value.status == SimulationStatus.PAUSED) {
+            if (!silent) viewModelScope.launch { _toastMessage.emit("仿真运行中，由路线驱动虚拟位置") }
+            return
+        }
+
+        viewModelScope.launch {
+            val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return@launch
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && !lm.isLocationEnabled) {
+                rootMock.ensureSystemLocationEnabled()
+            }
+
+            var bestLoc: Location? = null
+            val providers = listOf(
+                LocationManager.GPS_PROVIDER,
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER
+            )
+            for (p in providers) {
+                try {
+                    val l = lm.getLastKnownLocation(p)
+                    if (l != null && (bestLoc == null || l.time > bestLoc.time)) bestLoc = l
+                } catch (ignored: Exception) {
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try {
+                    val l = lm.getLastKnownLocation(LocationManager.FUSED_PROVIDER)
+                    if (l != null && (bestLoc == null || l.time > bestLoc.time)) bestLoc = l
+                } catch (ignored: Exception) {
+                }
+            }
+
+            if (bestLoc != null) {
+                onRealLocationResolved(GeoPoint(bestLoc.latitude, bestLoc.longitude, bestLoc.altitude), silent)
+            } else {
+                try {
+                    val listener = object : android.location.LocationListener {
+                        override fun onLocationChanged(location: Location) {
+                            unregisterSelf()
+                            onRealLocationResolved(
+                                GeoPoint(location.latitude, location.longitude, location.altitude),
+                                silent
+                            )
+                        }
+
+                        fun unregisterSelf() {
+                            lm.removeUpdates(this)
+                        }
+
+                        @Deprecated("Deprecated in Java")
+                        override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+                    }
+                    val fired = if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                        lm.requestSingleUpdate(LocationManager.GPS_PROVIDER, listener, null); true
+                    } else if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                        lm.requestSingleUpdate(LocationManager.NETWORK_PROVIDER, listener, null); true
+                    } else false
+                    if (!fired && !silent) _toastMessage.emit("系统定位未开启，无法获取真实位置")
+                } catch (e: Exception) {
+                    if (!silent) _toastMessage.emit("真实定位获取失败: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun onRealLocationResolved(point: GeoPoint, silent: Boolean) {
+        _deviceLocation.value = point
+        // First-ever launch (no persisted virtual position): adopt the real
+        // position as the initial virtual position.
+        if (_mockLocation.value == null) {
+            _mockLocation.value = point
+            persistOverrideState()
+            if (!silent) {
+                viewModelScope.launch {
+                    _toastMessage.emit("虚拟位置已初始化为当前真实位置")
+                }
+            }
+        } else if (!silent) {
+            viewModelScope.launch {
+                _toastMessage.emit("真实位置已刷新 (%.4f, %.4f)".format(point.latitude, point.longitude))
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Standalone override: public actions
+    // ------------------------------------------------------------------
+
+    /** Set (or move) the standalone virtual position; restarts the fixed injection if it is active. */
+    fun setMockLocation(point: GeoPoint) {
+        _mockLocation.value = point
+        persistOverrideState()
+        viewModelScope.launch {
+            _mapCenterEvent.emit(point)
+            _toastMessage.emit("虚拟位置已设置: %.5f, %.5f".format(point.latitude, point.longitude))
+        }
+        val ctx = appContext
+        if (ctx != null && _isFixedInjectEnabled.value) {
+            MockForegroundService.startFixedService(ctx, point)
+        }
+    }
+
+    /** Sync the virtual position back to the current real device position. */
+    fun syncMockToRealLocation() {
+        val real = _deviceLocation.value
+        if (real == null) {
+            viewModelScope.launch { _toastMessage.emit("尚未获取真实位置，无法同步") }
+            return
+        }
+        setMockLocation(real)
+    }
+
+    /** Enable / disable the 1Hz fixed-point location injection service. */
+    fun setFixedInjectionEnabled(context: Context, enabled: Boolean) {
+        if (enabled) {
+            val status = snapshot.value.status
+            if (status == SimulationStatus.RUNNING || status == SimulationStatus.PAUSED) {
+                viewModelScope.launch { _toastMessage.emit("仿真运行中，虚拟位置由路线驱动") }
+                return
+            }
+            val point = _mockLocation.value ?: run {
+                viewModelScope.launch { _toastMessage.emit("请先设置虚拟位置，再开启定点注入") }
+                return
+            }
+            MockForegroundService.startFixedService(context, point)
+            _isFixedInjectEnabled.value = true
+            persistOverrideState()
+            viewModelScope.launch { _toastMessage.emit("定点注入已开启：系统位置已锁定到虚拟位置") }
+        } else {
+            MockForegroundService.stopFixedService(context)
+            _isFixedInjectEnabled.value = false
+            persistOverrideState()
+            viewModelScope.launch { _toastMessage.emit("定点注入已关闭，系统定位恢复正常") }
+        }
+    }
+
+    /** Push a manually chosen step count to the health ecosystem (standalone, no route needed). */
+    fun applyStepOverride(steps: Long) {
+        if (steps < 0) return
+        _overrideSteps.value = steps
+        persistOverrideState()
+        viewModelScope.launch {
+            val ctx = appContext
+            if (ctx != null) {
+                // Multiple pulses: some health apps only sample the counter on screen-on
+                healthManager.dispatchStepOverride(ctx, steps)
+                delay(2000L)
+                healthManager.dispatchStepOverride(ctx, steps)
+                delay(3000L)
+                healthManager.dispatchStepOverride(ctx, steps)
+            }
+            // Root boost: re-broadcast the WeChat-Sport intent from system context
+            rootExecutor.execute(
+                "am broadcast -a com.tencent.mm.plugin.sport.ACTION_STEP_COUNTER " +
+                        "--ei step_count ${steps.coerceAtMost(Int.MAX_VALUE.toLong())} " +
+                        "--el step_timestamp ${System.currentTimeMillis()}"
+            )
+            _toastMessage.emit("已推送虚拟步数: $steps 步")
+        }
+    }
+
+    fun clearStepOverride() {
+        _overrideSteps.value = null
+        persistOverrideState()
+        viewModelScope.launch { _toastMessage.emit("已清除虚拟步数") }
     }
 
     fun toggleControlPanel() {
@@ -296,7 +607,13 @@ class MainViewModel(
         // reset the engine mid-run and desync the foreground service / notification.
         if (snapshot.value.status == SimulationStatus.RUNNING || snapshot.value.status == SimulationStatus.PAUSED) {
             viewModelScope.launch {
-                _toastMessage.emit("仿真运行中，请先【结束】再修改路线")
+                _toastMessage.emit(
+                    if (_selectionMode.value == SelectionMode.SET_MOCK) {
+                        "仿真运行中，虚拟位置由路线驱动，请先【结束】"
+                    } else {
+                        "仿真运行中，请先【结束】再修改路线"
+                    }
+                )
             }
             return
         }
@@ -335,6 +652,10 @@ class MainViewModel(
                 if (currentEnd != null) {
                     calculateRoute(point, currentEnd)
                 }
+            }
+            SelectionMode.SET_MOCK -> {
+                _selectionMode.value = SelectionMode.NONE
+                setMockLocation(point)
             }
         }
     }
@@ -384,6 +705,12 @@ class MainViewModel(
             return
         }
 
+        // The route engine takes over the injected location — drop the standalone
+        // fixed-point injection state first (the service also cancels its ticker).
+        if (_isFixedInjectEnabled.value) {
+            _isFixedInjectEnabled.value = false
+            persistOverrideState()
+        }
         MockForegroundService.startService(context)
     }
 
@@ -444,6 +771,20 @@ class MainViewModel(
 
     fun updateConfig(newConfig: SimulationConfig) {
         engine.updateConfig(newConfig)
+    }
+
+    override fun onCleared() {
+        unregisterStepSensor()
+        super.onCleared()
+    }
+
+    companion object {
+        private const val OVERRIDE_PREFS_NAME = "stepshift_override_prefs"
+        private const val PREF_MOCK_LAT = "mock_lat"
+        private const val PREF_MOCK_LON = "mock_lon"
+        private const val PREF_MOCK_ALT = "mock_alt"
+        private const val PREF_OVERRIDE_STEPS = "override_steps"
+        private const val PREF_FIXED_INJECT = "fixed_inject"
     }
 }
 

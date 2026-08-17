@@ -141,6 +141,7 @@ fun ControlPanel(
                                 text = when (selectionMode) {
                                     SelectionMode.SET_START -> "请点击地图或搜索设置【起点】"
                                     SelectionMode.SET_END -> "请点击地图或搜索设置【终点】"
+                                    SelectionMode.SET_MOCK -> "请点击地图设置【虚拟位置】"
                                     SelectionMode.NONE -> "点击地图重选起点"
                                 },
                                 style = MaterialTheme.typography.bodySmall,

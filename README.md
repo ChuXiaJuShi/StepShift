@@ -74,11 +74,6 @@ app/src/main/java/com/example/stepshift/
 └── utils/              # WGS-84 / GCJ-02 坐标系转换工具
 ```
 
-详细的设计思路与技术细节可参考 `docs/` 目录：
-- [docs/PLAN.md](docs/PLAN.md)：模块设计与物理公式推导
-- [docs/PROBLEM.md](docs/PROBLEM.md)：Android 14~16 兼容性与网络排坑记录
-- [docs/HANDOVER.md](docs/HANDOVER.md)：交接说明与运维指令
-
 ---
 
 ## 免责声明

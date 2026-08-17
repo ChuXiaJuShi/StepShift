@@ -51,6 +51,42 @@ class HealthDataManager private constructor() {
         }
     }
 
+    /**
+     * Standalone step override: push an arbitrary step count (decoupled from any
+     * route simulation) through the same multi-protocol broadcast channels.
+     */
+    fun dispatchStepOverride(context: Context, totalSteps: Long) {
+        try {
+            // 1. Generic StepShift Sport Broadcast
+            val stepIntent = Intent("com.example.stepshift.ACTION_STEP_UPDATED").apply {
+                putExtra("extra_total_steps", totalSteps)
+                putExtra("extra_distance_meters", 0.0)
+                putExtra("extra_speed_kmh", 0.0)
+                putExtra("extra_cadence_spm", 0)
+                putExtra("extra_calories_kcal", 0.0)
+                setPackage(context.packageName)
+            }
+            context.sendBroadcast(stepIntent)
+
+            // 2. WeChat Sport / Tencent Sport compatible step counter intent
+            val wechatSportIntent = Intent("com.tencent.mm.plugin.sport.ACTION_STEP_COUNTER").apply {
+                putExtra("step_count", totalSteps.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+                putExtra("step_timestamp", System.currentTimeMillis())
+            }
+            context.sendBroadcast(wechatSportIntent)
+
+            // 3. Android Standard Pedometer / Fitness Step Intent
+            val standardPedometerIntent = Intent("android.intent.action.STEP_COUNTER_UPDATED").apply {
+                putExtra("steps", totalSteps)
+                putExtra("distance", 0.0)
+                putExtra("calories", 0.0)
+            }
+            context.sendBroadcast(standardPedometerIntent)
+        } catch (e: Exception) {
+            Log.e("StepShiftHealth", "Failed to dispatch step override broadcast", e)
+        }
+    }
+
     companion object {
         val instance by lazy { HealthDataManager() }
     }

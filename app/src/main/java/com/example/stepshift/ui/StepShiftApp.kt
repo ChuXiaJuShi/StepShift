@@ -18,9 +18,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.stepshift.ui.components.ControlPanel
+import com.example.stepshift.ui.components.LocationOverrideDialog
 import com.example.stepshift.ui.components.MapViewContainer
+import com.example.stepshift.ui.components.OverrideStatusCard
 import com.example.stepshift.ui.components.SearchBarOverlay
 import com.example.stepshift.ui.components.SettingsDialog
+import com.example.stepshift.ui.components.StepOverrideDialog
 import com.example.stepshift.ui.components.TelemetryDashboard
 import kotlinx.coroutines.flow.collectLatest
 
@@ -48,6 +51,23 @@ fun StepShiftApp(
     val isTrackingEnabled by viewModel.isTrackingEnabled.collectAsState()
     val isControlPanelExpanded by viewModel.isControlPanelExpanded.collectAsState()
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showStepOverrideDialog by remember { mutableStateOf(false) }
+    var showLocationOverrideDialog by remember { mutableStateOf(false) }
+
+    // Standalone override state (independent step / location spoofing)
+    val sensorSteps by viewModel.sensorSteps.collectAsState()
+    val overrideSteps by viewModel.overrideSteps.collectAsState()
+    val mockLocation by viewModel.mockLocation.collectAsState()
+    val realLocation by viewModel.deviceLocation.collectAsState()
+    val isFixedInjectEnabled by viewModel.isFixedInjectEnabled.collectAsState()
+    val isSimulating = snapshot.status == com.example.stepshift.model.SimulationStatus.RUNNING ||
+            snapshot.status == com.example.stepshift.model.SimulationStatus.PAUSED
+
+    // Bootstrap the standalone override subsystem (restore persisted state,
+    // step sensor listener, initial real-location resolution)
+    LaunchedEffect(Unit) {
+        viewModel.initializeOverride(context)
+    }
 
     // Telemetry HUD only earns its screen space while a simulation is active,
     // and must never compete with the search result dropdown.
@@ -172,6 +192,7 @@ fun StepShiftApp(
                     endPoint = endPoint,
                     routeResult = routeResult,
                     snapshot = snapshot,
+                    mockPoint = if (isSimulating) null else mockLocation,
                     isTrackingEnabled = isTrackingEnabled,
                     centerEvent = viewModel.mapCenterEvent,
                     onMapClick = { viewModel.onMapClick(it) },
@@ -179,7 +200,7 @@ fun StepShiftApp(
                     onUserPanMap = { viewModel.onUserPanMap() }
                 )
 
-                // 2. Top Floating Area (Search Bar + Telemetry HUD)
+                // 2. Top Floating Area (Search Bar + Override Status + Telemetry HUD)
                 Column(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -197,6 +218,22 @@ fun StepShiftApp(
                             viewModel.onSearchResultSelected(result, asStart)
                         }
                     )
+
+                    // Standalone override status card (steps + location), hidden
+                    // while the search dropdown is open to avoid the overlap.
+                    AnimatedVisibility(visible = searchResults.isEmpty()) {
+                        OverrideStatusCard(
+                            modifier = Modifier.padding(horizontal = 14.dp),
+                            sensorSteps = sensorSteps,
+                            overrideSteps = overrideSteps,
+                            realLocation = realLocation,
+                            mockLocation = viewModel.effectiveMockLocation,
+                            isFixedInjectEnabled = isFixedInjectEnabled,
+                            isSimulating = isSimulating,
+                            onEditSteps = { showStepOverrideDialog = true },
+                            onEditLocation = { showLocationOverrideDialog = true }
+                        )
+                    }
 
                     // Telemetry Dashboard HUD (hidden while idle or while search results are shown)
                     AnimatedVisibility(visible = showDashboard) {
@@ -238,6 +275,31 @@ fun StepShiftApp(
             onDismiss = { showSettingsDialog = false },
             onGrantRootPermissions = { viewModel.grantRootMockPermissions(context) },
             onUpdateConfig = { viewModel.updateConfig(it) }
+        )
+    }
+
+    if (showStepOverrideDialog) {
+        StepOverrideDialog(
+            sensorSteps = sensorSteps,
+            overrideSteps = overrideSteps,
+            onDismiss = { showStepOverrideDialog = false },
+            onApply = { viewModel.applyStepOverride(it) },
+            onClear = { viewModel.clearStepOverride() }
+        )
+    }
+
+    if (showLocationOverrideDialog) {
+        LocationOverrideDialog(
+            realLocation = realLocation,
+            mockLocation = mockLocation,
+            isFixedInjectEnabled = isFixedInjectEnabled,
+            isSimulating = isSimulating,
+            onDismiss = { showLocationOverrideDialog = false },
+            onRefreshReal = { viewModel.refreshRealLocation() },
+            onSyncFromReal = { viewModel.syncMockToRealLocation() },
+            onPickOnMap = { viewModel.setSelectionMode(SelectionMode.SET_MOCK) },
+            onManualApply = { viewModel.setMockLocation(it) },
+            onToggleFixedInject = { viewModel.setFixedInjectionEnabled(context, it) }
         )
     }
 }
