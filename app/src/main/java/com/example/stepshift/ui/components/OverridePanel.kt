@@ -286,6 +286,7 @@ fun StepOverrideDialog(
     chHealthConnect: Boolean,
     chZepp: Boolean,
     chLsposed: Boolean,
+    lsposedModuleActive: Boolean,
     zeppEmail: String,
     zeppPassword: String,
     onDismiss: () -> Unit,
@@ -430,9 +431,14 @@ fun StepOverrideDialog(
 
                 if (chLsposed) {
                     Text(
-                        text = "需安装并启用 LSPosed 模块 (xposed/build/outputs/apk/debug/xposed-debug.apk)，作用域勾选微信/QQ/支付宝后重启目标应用。",
+                        text = if (lsposedModuleActive) {
+                            "✓ 模块已激活，传感器钩子运行中；作用域勾选微信/QQ/支付宝并重启目标应用后即生效。"
+                        } else {
+                            "⚠ 模块未激活或未安装：请在 LSPosed 管理器启用模块并勾选作用域 (详见 设置 → LSPosed 步数注入模块)，否则该渠道不会推送步数。"
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (lsposedModuleActive) MaterialTheme.colorScheme.secondary
+                        else MaterialTheme.colorScheme.error,
                         fontSize = 11.sp
                     )
                 }

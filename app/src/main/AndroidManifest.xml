@@ -46,6 +46,11 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Package visibility: detect whether the LSPosed module APK is installed -->
+    <queries>
+        <package android:name="com.example.stepshift.xposed" />
+    </queries>
+
     <application
         android:name=".StepShiftApplication"
         android:allowBackup="true"

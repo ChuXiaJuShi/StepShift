@@ -18,7 +18,7 @@ StepShift 是一个基于 Android Root (SU) 权限的运动与位置仿真工具
 - **独立步数修改**：不依赖路线仿真，可单独设定任意虚拟步数并按需推送到多个渠道（可多选）：
   - **系统健康 (Health Connect)**：以 `StepsRecord` 写入系统 Health Connect，系统步数页与 HC 生态应用可见（先删后写不重复累计，清除时可完整回收）；
   - **小米运动 (Zepp) 云同步**：经 Zepp 账号云端上传步数，微信运动/QQ/支付宝绑定小米运动数据源后排行榜生效；
-  - **LSPosed 传感器注入**：配套 `:xposed` 模块 hook 目标应用计步传感器读数，直接改写为虚拟步数。
+  - **LSPosed 传感器注入**：配套 `:xposed` 模块 hook 目标应用计步传感器读数，直接改写为虚拟步数。模块安装/激活状态可在 App 内自检（设置页实时显示，步数弹窗渠道行同步提示）。
 - **独立定位修改**：可单独设定虚拟位置（地图选点/手动坐标/同步真实位置），开启「定点注入」后系统定位被 1Hz 持续锁定；虚拟位置、虚拟步数与注入开关跨启动持久化。
 - **运动健康数据同步**：每秒向系统广播步数、里程与卡路里增量，兼容微信运动及 Android 标准计步器广播。
 
@@ -92,7 +92,9 @@ adb install /data/adb/modules/zygisk_lsposed/manager.apk        # 管理器需�
 adb install xposed/build/outputs/apk/debug/xposed-debug.apk
 ```
 
-然后在 **LSPosed 管理器 → 模块 → StepShift 步数注入模块** 中启用模块，作用域勾选目标应用（微信 `com.tencent.mm` / QQ `com.tencent.mobileqq` / 支付宝 `com.eg.android.AlipayGphone`），强制停止并重启目标应用。此后在 StepShift 中应用虚拟步数，目标应用的计步读数即为虚拟值（模块经 `/data/local/tmp/stepshift_steps.txt` 共享文件获取数值）。
+然后在 **LSPosed 管理器 → 模块 → StepShift 步数注入模块** 中启用模块，作用域勾选目标应用（微信 `com.tencent.mm` / QQ `com.tencent.mobileqq` / 支付宝 `com.eg.android.AlipayGphone`；若要 App 内显示激活状态，需同时勾选 StepShift 自身），强制停止并重启目标应用。此后在 StepShift 中应用虚拟步数，目标应用的计步读数即为虚拟值（模块经 `/data/local/tmp/stepshift_steps.txt` 共享文件获取数值）。
+
+**状态自检**：打开 StepShift「设置 → LSPosed 步数注入模块」，可看到三种状态——`未安装模块` / `已安装 · 未激活`（附"打开管理器"直达按钮）/ `已激活 · 传感器钩子运行中`；设置页同时显示 Health Connect 写入授权状态与应用/模块版本号。
 
 回滚：`ksud module uninstall zygisk_lsposed && ksud module uninstall zygisksu` 后重启。
 
@@ -109,7 +111,7 @@ app/src/main/java/com/example/stepshift/
 ├── root/               # 常驻 su 管道交互与 LocationManager 底层注入
 ├── service/            # 前台保活服务 (路线仿真 + 定点注入双驱动)、WakeLock 与通知栏管理
 ├── ui/                 # Jetpack Compose 界面、地图容器、控制组件与 Override 状态卡
-└── utils/              # WGS-84 / GCJ-02 坐标系转换工具
+└── utils/              # WGS-84 / GCJ-02 坐标系转换 + LSPosed 模块自检端点 (util/LsposedStatus.kt)
 
 xposed/                 # LSPosed 步数注入模块 (hook 计步传感器读数)
 └── src/main/java/com/example/stepshift/xposed/

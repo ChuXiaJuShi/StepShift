@@ -17,6 +17,8 @@ android {
         applicationId = "com.example.stepshift.xposed"
         minSdk = 28
         targetSdk = 36
+        versionCode = 7
+        versionName = "0.7"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

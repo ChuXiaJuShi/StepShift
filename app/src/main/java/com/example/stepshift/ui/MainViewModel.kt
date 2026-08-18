@@ -23,6 +23,7 @@ import com.example.stepshift.network.ZeppApiClient
 import com.example.stepshift.root.RootLocationMock
 import com.example.stepshift.root.RootShellExecutor
 import com.example.stepshift.service.MockForegroundService
+import com.example.stepshift.util.LsposedStatus
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -34,6 +35,18 @@ enum class SelectionMode {
     SET_END,
     SET_MOCK
 }
+
+/**
+ * Observed state of the companion LSPosed module, used by the settings UI:
+ * installed (APK present) / active (module hooked into this process) /
+ * hookedQueues (sensor-dispatch hooks the module reported) / versionName.
+ */
+data class LsposedModuleStatus(
+    val installed: Boolean,
+    val active: Boolean,
+    val hookedQueues: Int,
+    val versionName: String?
+)
 
 class MainViewModel(
     private val engine: SimulationEngine = SimulationEngine.instance,
@@ -121,6 +134,13 @@ class MainViewModel(
 
     private val _zeppPassword = MutableStateFlow("")
     val zeppPassword: StateFlow<String> = _zeppPassword.asStateFlow()
+
+    // ---- Environment self-check (settings UI) ----
+    private val _lsposedStatus = MutableStateFlow(LsposedModuleStatus(false, false, 0, null))
+    val lsposedStatus: StateFlow<LsposedModuleStatus> = _lsposedStatus.asStateFlow()
+
+    private val _hcWriteGranted = MutableStateFlow<Boolean?>(null)
+    val hcWriteGranted: StateFlow<Boolean?> = _hcWriteGranted.asStateFlow()
 
     private val zeppClient = ZeppApiClient()
 
@@ -578,6 +598,57 @@ class MainViewModel(
                 rootExecutor.execute("printf '%s' '$steps' > $LSPOSED_SPOOF_FILE && chmod 644 $LSPOSED_SPOOF_FILE")
             } else {
                 rootExecutor.execute("rm -f $LSPOSED_SPOOF_FILE")
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Environment self-check: LSPosed module / Health Connect / versions
+    // ------------------------------------------------------------------
+
+    /** Re-probe the LSPosed module state and the Health Connect write grant. */
+    fun refreshSystemStatus(context: Context) {
+        viewModelScope.launch {
+            val version = LsposedStatus.getModuleVersion(context)
+            _lsposedStatus.value = LsposedModuleStatus(
+                installed = version != null,
+                active = LsposedStatus.isModuleActive(),
+                hookedQueues = LsposedStatus.getHookedQueueCount(),
+                versionName = version
+            )
+            _hcWriteGranted.value = healthConnectWriter.hasWritePermission(context)
+        }
+    }
+
+    fun getAppVersion(context: Context): String = try {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
+    } catch (e: Exception) {
+        "?"
+    }
+
+    fun openLsposedManager(context: Context) {
+        viewModelScope.launch {
+            val intent = context.packageManager.getLaunchIntentForPackage("org.lsposed.manager")
+            if (intent != null) {
+                try {
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    _toastMessage.emit("无法打开 LSPosed 管理器: ${e.message}")
+                }
+            } else {
+                _toastMessage.emit("未检测到 LSPosed 管理器，请先安装 LSPosed")
+            }
+        }
+    }
+
+    fun openHealthConnectSettings(context: Context) {
+        viewModelScope.launch {
+            try {
+                val intent = Intent("android.health.connect.action.HEALTH_HOME_SETTINGS")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                _toastMessage.emit("无法打开 Health Connect 设置页")
             }
         }
     }

@@ -67,6 +67,8 @@ fun StepShiftApp(
     val chLsposed by viewModel.chLsposed.collectAsState()
     val zeppEmail by viewModel.zeppEmail.collectAsState()
     val zeppPassword by viewModel.zeppPassword.collectAsState()
+    val lsposedStatus by viewModel.lsposedStatus.collectAsState()
+    val hcWriteGranted by viewModel.hcWriteGranted.collectAsState()
     val isSimulating = snapshot.status == com.example.stepshift.model.SimulationStatus.RUNNING ||
             snapshot.status == com.example.stepshift.model.SimulationStatus.PAUSED
 
@@ -279,22 +281,34 @@ fun StepShiftApp(
     }
 
     if (showSettingsDialog) {
+        // Probe the module / Health Connect state every time the dialog opens
+        LaunchedEffect(Unit) { viewModel.refreshSystemStatus(context) }
         SettingsDialog(
             isRootAvailable = isRootAvailable,
             config = config,
+            moduleStatus = lsposedStatus,
+            hcWriteGranted = hcWriteGranted,
+            isLsposedChannelEnabled = chLsposed,
+            appVersion = viewModel.getAppVersion(context),
             onDismiss = { showSettingsDialog = false },
             onGrantRootPermissions = { viewModel.grantRootMockPermissions(context) },
+            onRefreshSystemStatus = { viewModel.refreshSystemStatus(context) },
+            onOpenLsposedManager = { viewModel.openLsposedManager(context) },
+            onOpenHealthSettings = { viewModel.openHealthConnectSettings(context) },
             onUpdateConfig = { viewModel.updateConfig(it) }
         )
     }
 
     if (showStepOverrideDialog) {
+        // The LSPosed channel hint needs the module state too
+        LaunchedEffect(Unit) { viewModel.refreshSystemStatus(context) }
         StepOverrideDialog(
             sensorSteps = sensorSteps,
             overrideSteps = overrideSteps,
             chHealthConnect = chHealthConnect,
             chZepp = chZepp,
             chLsposed = chLsposed,
+            lsposedModuleActive = lsposedStatus.active,
             zeppEmail = zeppEmail,
             zeppPassword = zeppPassword,
             onDismiss = { showStepOverrideDialog = false },

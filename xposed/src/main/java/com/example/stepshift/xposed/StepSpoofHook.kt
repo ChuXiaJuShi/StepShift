@@ -3,6 +3,7 @@ package com.example.stepshift.xposed
 import android.hardware.Sensor
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodHook
+import de.robv.android.xposed.XC_MethodReplacement
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
@@ -52,6 +53,22 @@ class StepSpoofHook : IXposedHookLoadPackage {
         } catch (t: Throwable) {
             XposedBridge.log("StepShift-Xposed: hook failed in ${lpparam.packageName}: ${t.message}")
         }
+
+        // Self-status hook: when running inside the StepShift app itself, let it
+        // detect that the module is alive and report the sensor-hook count.
+        if (lpparam.packageName == HOST_APP_PACKAGE) {
+            try {
+                val statusClass = XposedHelpers.findClass(
+                    "com.example.stepshift.util.LsposedStatus",
+                    lpparam.classLoader
+                )
+                XposedBridge.hookAllMethods(statusClass, "isModuleActive", XC_MethodReplacement.returnConstant(true))
+                XposedBridge.hookAllMethods(statusClass, "getHookedQueueCount", XC_MethodReplacement.returnConstant(hookedCount))
+            } catch (t: Throwable) {
+                XposedBridge.log("StepShift-Xposed: self-status hook failed: ${t.message}")
+            }
+        }
+
         XposedBridge.log("StepShift-Xposed: initialized in ${lpparam.packageName}, queues hooked=$hookedCount")
     }
 
@@ -65,6 +82,10 @@ class StepSpoofHook : IXposedHookLoadPackage {
         } catch (t: Throwable) {
             false
         }
+    }
+
+    private companion object {
+        const val HOST_APP_PACKAGE = "com.example.stepshift"
     }
 }
 
