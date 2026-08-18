@@ -438,7 +438,7 @@ fun StepOverrideDialog(
                 }
 
                 Text(
-                    text = "应用后将按所选渠道推送虚拟步数（Health Connect 写入系统步数页；小米运动走云端同步；LSPosed 改传感器读数）。\n首次使用 Health Connect 请在系统「数据管理 → 数据源和优先级」中添加 StepShift。",
+                    text = "应用后将按所选渠道推送虚拟步数（Health Connect 写入系统步数页，与真实步数叠加显示；小米运动走云端同步；LSPosed 改传感器读数）。\n首次使用 Health Connect 请在系统「数据管理 → 数据源和优先级」中添加 StepShift。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

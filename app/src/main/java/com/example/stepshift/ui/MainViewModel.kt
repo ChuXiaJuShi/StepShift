@@ -2,6 +2,7 @@ package com.example.stepshift.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -236,8 +237,15 @@ class MainViewModel(
                 delay(1500L)
                 healthManager.dispatchStepOverride(appContext!!, steps)
                 // HC records are date-scoped: re-write for the new day after rollover
-                ensureHealthConnectPermission()
-                healthConnectWriter.applySteps(appContext!!, steps)
+                // (respect the channel switch, same as applyStepOverride — F3)
+                if (_chHealthConnect.value && ensureHealthConnectPermission()) {
+                    healthConnectWriter.applySteps(appContext!!, steps)
+                }
+            }
+            // F4: rebuild the LSPosed spoof file on session restore — the file may
+            // have been wiped by a reboot / system cleanup since last session.
+            if (_chLsposed.value && _overrideSteps.value != null) {
+                syncLsposedSpoofFile()
             }
             // Resume fixed-point injection from the previous session
             if (_isFixedInjectEnabled.value && _mockLocation.value != null &&
@@ -498,7 +506,15 @@ class MainViewModel(
                         _toastMessage.emit("Health Connect 步数写入失败")
                     }
                 } else {
-                    _toastMessage.emit("未获得 Health Connect 写入权限，步数仅通过广播推送")
+                    _toastMessage.emit("未获得 Health Connect 写入权限，请在系统页手动授权")
+                    // F5: root pm grant is a no-op for health permissions on some ROMs —
+                    // fall back to the standard Health Connect home so the user can grant manually.
+                    try {
+                        val intent = Intent("android.health.connect.action.HEALTH_HOME_SETTINGS")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ctx.startActivity(intent)
+                    } catch (_: Exception) {
+                    }
                 }
             }
             // Zepp cloud channel (WeChat/QQ/Alipay via 小米运动 data-source binding)
@@ -545,8 +561,14 @@ class MainViewModel(
     fun setZeppCredentials(email: String, password: String) {
         _zeppEmail.value = email.trim()
         _zeppPassword.value = password
-        persistOverrideState()
+        // R1: debounce disk writes — persisting on every keystroke is an IO storm
+        credsPersistJob?.cancel()
+        credsPersistJob = viewModelScope.launch {
+            delay(800L)
+            persistOverrideState()
+        }
     }
+    private var credsPersistJob: Job? = null
 
     /** Write (or remove) the shared spoof file consumed by the LSPosed module. */
     private fun syncLsposedSpoofFile() {

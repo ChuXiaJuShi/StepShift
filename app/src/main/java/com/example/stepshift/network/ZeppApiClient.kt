@@ -1,6 +1,8 @@
 package com.example.stepshift.network
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -84,9 +86,10 @@ class ZeppApiClient {
                 return null to "登录异常，服务器返回 ${response.code}"
             }
             val location = response.header("Location") ?: return null to "登录异常：无重定向"
-            val access = Regex("(?<=access=).*?(?=&)").find(location)?.value
+            // NOTE: access/error may be the LAST query parameter (no trailing '&')
+            val access = Regex("(?<=access=)[^&]+").find(location)?.value
             if (access != null) return access to null
-            val error = Regex("(?<=error=).*?(?=&)").find(location)?.value
+            val error = Regex("(?<=error=)[^&]+").find(location)?.value
             return null to "账号或密码错误 (${error ?: "未知错误"})"
         }
     }
@@ -190,19 +193,53 @@ class ZeppApiClient {
 
     /**
      * Full login + upload. Returns a human-readable error message, or null on success.
+     * Tokens are cached per account (Z5): repeat applies reuse them and only fall
+     * back to a fresh login once if the cached token got rejected. Serialized with
+     * a Mutex so rapid applies cannot interleave multiple logins/uploads.
      */
-    suspend fun pushSteps(email: String, password: String, steps: Long): String? = withContext(Dispatchers.IO) {
-        try {
-            val (accessToken, loginError) = loginAccessToken(email, password)
-            if (accessToken == null) return@withContext (loginError ?: "登录失败")
+    private val pushMutex = Mutex()
+    private var cachedEmail: String? = null
+    private var cachedTokens: ZeppTokens? = null
 
-            val (tokens, grantError) = grantLoginTokens(accessToken)
-            if (tokens == null) return@withContext (grantError ?: "令牌获取失败")
+    suspend fun pushSteps(email: String, password: String, steps: Long): String? = pushMutex.withLock {
+        withContext(Dispatchers.IO) {
+            try {
+                var tokens = cachedTokens.takeIf { cachedEmail == email }
+                val fromCache = tokens != null
 
-            val (ok, uploadError) = postSteps(tokens, steps)
-            if (!ok) uploadError ?: "步数上传失败" else null
-        } catch (e: Exception) {
-            "网络异常: ${e.message}"
+                if (tokens == null) {
+                    val (accessToken, loginError) = loginAccessToken(email, password)
+                    if (accessToken == null) return@withContext (loginError ?: "登录失败")
+                    val (t, grantError) = grantLoginTokens(accessToken)
+                    if (t == null) return@withContext (grantError ?: "令牌获取失败")
+                    tokens = t
+                }
+
+                var (ok, uploadError) = postSteps(tokens, steps)
+                if (!ok && fromCache) {
+                    // Cached token may have expired — one fresh login, then retry once
+                    val (accessToken, _) = loginAccessToken(email, password)
+                    if (accessToken != null) {
+                        val (t, _) = grantLoginTokens(accessToken)
+                        if (t != null) {
+                            tokens = t
+                            val retry = postSteps(tokens, steps)
+                            ok = retry.first
+                            uploadError = retry.second
+                        }
+                    }
+                }
+
+                if (ok) {
+                    cachedEmail = email
+                    cachedTokens = tokens
+                    null
+                } else {
+                    uploadError ?: "步数上传失败"
+                }
+            } catch (e: Exception) {
+                "网络异常: ${e.message}"
+            }
         }
     }
 
