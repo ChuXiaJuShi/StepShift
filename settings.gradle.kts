@@ -19,9 +19,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // XposedBridgeApi (LSPosed module stubs)
+        maven { url = uri("https://api.xposed.info/") }
     }
 }
 
 rootProject.name = "StepShift"
 include(":app")
+include(":xposed")
  

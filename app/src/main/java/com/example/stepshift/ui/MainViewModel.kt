@@ -18,6 +18,7 @@ import com.example.stepshift.model.*
 import com.example.stepshift.network.GeocodingApiClient
 import com.example.stepshift.network.OsrmApiClient
 import com.example.stepshift.network.SearchLocationResult
+import com.example.stepshift.network.ZeppApiClient
 import com.example.stepshift.root.RootLocationMock
 import com.example.stepshift.root.RootShellExecutor
 import com.example.stepshift.service.MockForegroundService
@@ -101,6 +102,26 @@ class MainViewModel(
     // system location onto the standalone virtual position
     private val _isFixedInjectEnabled = MutableStateFlow(false)
     val isFixedInjectEnabled: StateFlow<Boolean> = _isFixedInjectEnabled.asStateFlow()
+
+    // ---- Push channels for the standalone step override ----
+    // Health Connect (system dashboard), Zepp cloud (WeChat/QQ/Alipay via 小米运动
+    // data-source binding), LSPosed sensor hook (file-synced spoof value)
+    private val _chHealthConnect = MutableStateFlow(true)
+    val chHealthConnect: StateFlow<Boolean> = _chHealthConnect.asStateFlow()
+
+    private val _chZepp = MutableStateFlow(false)
+    val chZepp: StateFlow<Boolean> = _chZepp.asStateFlow()
+
+    private val _chLsposed = MutableStateFlow(false)
+    val chLsposed: StateFlow<Boolean> = _chLsposed.asStateFlow()
+
+    private val _zeppEmail = MutableStateFlow("")
+    val zeppEmail: StateFlow<String> = _zeppEmail.asStateFlow()
+
+    private val _zeppPassword = MutableStateFlow("")
+    val zeppPassword: StateFlow<String> = _zeppPassword.asStateFlow()
+
+    private val zeppClient = ZeppApiClient()
 
     private var appContext: Context? = null
     private var stepSensorListener: SensorEventListener? = null
@@ -198,6 +219,13 @@ class MainViewModel(
         _overrideSteps.value = if (prefs.contains(PREF_OVERRIDE_STEPS)) prefs.getLong(PREF_OVERRIDE_STEPS, 0L) else null
         _isFixedInjectEnabled.value = prefs.getBoolean(PREF_FIXED_INJECT, false)
 
+        // Push channel preferences
+        _chHealthConnect.value = prefs.getBoolean(PREF_CH_HC, true)
+        _chZepp.value = prefs.getBoolean(PREF_CH_ZEPP, false)
+        _chLsposed.value = prefs.getBoolean(PREF_CH_LSPOSED, false)
+        _zeppEmail.value = prefs.getString(PREF_ZEPP_EMAIL, "") ?: ""
+        _zeppPassword.value = prefs.getString(PREF_ZEPP_PASSWORD, "") ?: ""
+
         registerStepSensor()
         refreshRealLocation(silent = true)
 
@@ -244,6 +272,11 @@ class MainViewModel(
         val steps = _overrideSteps.value
         if (steps != null) editor.putLong(PREF_OVERRIDE_STEPS, steps) else editor.remove(PREF_OVERRIDE_STEPS)
         editor.putBoolean(PREF_FIXED_INJECT, _isFixedInjectEnabled.value)
+        editor.putBoolean(PREF_CH_HC, _chHealthConnect.value)
+        editor.putBoolean(PREF_CH_ZEPP, _chZepp.value)
+        editor.putBoolean(PREF_CH_LSPOSED, _chLsposed.value)
+        editor.putString(PREF_ZEPP_EMAIL, _zeppEmail.value)
+        editor.putString(PREF_ZEPP_PASSWORD, _zeppPassword.value)
         editor.apply()
     }
 
@@ -458,7 +491,7 @@ class MainViewModel(
             )
             // The effective channel: write into Health Connect so the system health
             // dashboard and HC-reading apps actually see the overridden steps.
-            if (ctx != null) {
+            if (ctx != null && _chHealthConnect.value) {
                 if (ensureHealthConnectPermission()) {
                     val ok = healthConnectWriter.applySteps(ctx, steps)
                     if (!ok) {
@@ -467,6 +500,24 @@ class MainViewModel(
                 } else {
                     _toastMessage.emit("未获得 Health Connect 写入权限，步数仅通过广播推送")
                 }
+            }
+            // Zepp cloud channel (WeChat/QQ/Alipay via 小米运动 data-source binding)
+            if (_chZepp.value) {
+                val email = _zeppEmail.value
+                val password = _zeppPassword.value
+                if (email.isBlank() || password.isBlank()) {
+                    _toastMessage.emit("未配置小米运动账号，已跳过云端同步")
+                } else {
+                    val error = zeppClient.pushSteps(email, password, steps)
+                    _toastMessage.emit(
+                        error?.let { "小米运动同步失败: $it" }
+                            ?: "小米运动云端同步成功，微信/QQ/支付宝稍后可见"
+                    )
+                }
+            }
+            // LSPosed sensor-hook channel
+            if (_chLsposed.value) {
+                syncLsposedSpoofFile()
             }
         }
     }
@@ -481,11 +532,44 @@ class MainViewModel(
         }
     }
 
+    /** Update which push channels the step override fans out to. */
+    fun setPushChannels(hc: Boolean, zepp: Boolean, lsposed: Boolean) {
+        _chHealthConnect.value = hc
+        _chZepp.value = zepp
+        _chLsposed.value = lsposed
+        persistOverrideState()
+        // Enabling LSPosed while an override is active -> sync the spoof file now
+        if (lsposed) syncLsposedSpoofFile()
+    }
+
+    fun setZeppCredentials(email: String, password: String) {
+        _zeppEmail.value = email.trim()
+        _zeppPassword.value = password
+        persistOverrideState()
+    }
+
+    /** Write (or remove) the shared spoof file consumed by the LSPosed module. */
+    private fun syncLsposedSpoofFile() {
+        viewModelScope.launch {
+            val steps = if (_chLsposed.value) _overrideSteps.value else null
+            if (steps != null) {
+                rootExecutor.execute("printf '%s' '$steps' > $LSPOSED_SPOOF_FILE && chmod 644 $LSPOSED_SPOOF_FILE")
+            } else {
+                rootExecutor.execute("rm -f $LSPOSED_SPOOF_FILE")
+            }
+        }
+    }
+
     fun clearStepOverride() {
         _overrideSteps.value = null
         persistOverrideState()
         viewModelScope.launch {
-            appContext?.let { healthConnectWriter.clearSteps(it) }
+            if (_chHealthConnect.value) {
+                appContext?.let { healthConnectWriter.clearSteps(it) }
+            }
+            if (_chLsposed.value) {
+                syncLsposedSpoofFile()
+            }
             _toastMessage.emit("已清除虚拟步数")
         }
     }
@@ -869,6 +953,12 @@ class MainViewModel(
         private const val PREF_MOCK_ALT = "mock_alt"
         private const val PREF_OVERRIDE_STEPS = "override_steps"
         private const val PREF_FIXED_INJECT = "fixed_inject"
+        private const val PREF_CH_HC = "push_ch_health_connect"
+        private const val PREF_CH_ZEPP = "push_ch_zepp"
+        private const val PREF_CH_LSPOSED = "push_ch_lsposed"
+        private const val PREF_ZEPP_EMAIL = "zepp_email"
+        private const val PREF_ZEPP_PASSWORD = "zepp_password"
+        private const val LSPOSED_SPOOF_FILE = "/data/local/tmp/stepshift_steps.txt"
     }
 }
 

@@ -62,6 +62,11 @@ fun StepShiftApp(
     val mockLocation by viewModel.mockLocation.collectAsState()
     val realLocation by viewModel.deviceLocation.collectAsState()
     val isFixedInjectEnabled by viewModel.isFixedInjectEnabled.collectAsState()
+    val chHealthConnect by viewModel.chHealthConnect.collectAsState()
+    val chZepp by viewModel.chZepp.collectAsState()
+    val chLsposed by viewModel.chLsposed.collectAsState()
+    val zeppEmail by viewModel.zeppEmail.collectAsState()
+    val zeppPassword by viewModel.zeppPassword.collectAsState()
     val isSimulating = snapshot.status == com.example.stepshift.model.SimulationStatus.RUNNING ||
             snapshot.status == com.example.stepshift.model.SimulationStatus.PAUSED
 
@@ -287,9 +292,16 @@ fun StepShiftApp(
         StepOverrideDialog(
             sensorSteps = sensorSteps,
             overrideSteps = overrideSteps,
+            chHealthConnect = chHealthConnect,
+            chZepp = chZepp,
+            chLsposed = chLsposed,
+            zeppEmail = zeppEmail,
+            zeppPassword = zeppPassword,
             onDismiss = { showStepOverrideDialog = false },
             onApply = { viewModel.applyStepOverride(it) },
-            onClear = { viewModel.clearStepOverride() }
+            onClear = { viewModel.clearStepOverride() },
+            onChannelsChange = { hc, zepp, lsposed -> viewModel.setPushChannels(hc, zepp, lsposed) },
+            onZeppCredentialsChange = { email, password -> viewModel.setZeppCredentials(email, password) }
         )
     }
 

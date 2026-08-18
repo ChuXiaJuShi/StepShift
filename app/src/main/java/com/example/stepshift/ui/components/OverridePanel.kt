@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -274,15 +275,24 @@ private fun CompactEditButton(onClick: () -> Unit, label: String) {
 
 /**
  * Standalone step editing dialog: shows the real sensor counter, lets the user
- * push an arbitrary virtual step count, or clear the override.
+ * push an arbitrary virtual step count, or clear the override. Also configures
+ * which push channels the override fans out to (Health Connect / Zepp cloud /
+ * LSPosed sensor hook) — shown from the very first use so the user picks.
  */
 @Composable
 fun StepOverrideDialog(
     sensorSteps: Long?,
     overrideSteps: Long?,
+    chHealthConnect: Boolean,
+    chZepp: Boolean,
+    chLsposed: Boolean,
+    zeppEmail: String,
+    zeppPassword: String,
     onDismiss: () -> Unit,
     onApply: (Long) -> Unit,
-    onClear: () -> Unit
+    onClear: () -> Unit,
+    onChannelsChange: (hc: Boolean, zepp: Boolean, lsposed: Boolean) -> Unit,
+    onZeppCredentialsChange: (email: String, password: String) -> Unit
 ) {
     var input by remember {
         mutableStateOf(overrideSteps?.toString() ?: sensorSteps?.toString() ?: "")
@@ -299,7 +309,8 @@ fun StepOverrideDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Row(
@@ -366,8 +377,68 @@ fun StepOverrideDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                // ---- Push channels (first-use choice, persisted) ----
+                HorizontalDivider()
                 Text(
-                    text = "应用后将写入系统 Health Connect（步数页可见）并同步微信运动/标准计步兼容广播，无需开始路线仿真。\n首次使用请在系统「Health Connect → 数据管理 → 数据源和优先级」中添加 StepShift，否则系统总计不显示本数据。",
+                    text = "推送渠道 (可多选)",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                ChannelCheckRow(
+                    label = "系统健康 (Health Connect，推荐)",
+                    checked = chHealthConnect,
+                    onCheckedChange = { onChannelsChange(it, chZepp, chLsposed) }
+                )
+                ChannelCheckRow(
+                    label = "小米运动云同步 (微信/QQ/支付宝)",
+                    checked = chZepp,
+                    onCheckedChange = { onChannelsChange(chHealthConnect, it, chLsposed) }
+                )
+                ChannelCheckRow(
+                    label = "LSPosed 传感器注入 (需装模块)",
+                    checked = chLsposed,
+                    onCheckedChange = { onChannelsChange(chHealthConnect, chZepp, it) }
+                )
+
+                if (chZepp) {
+                    OutlinedTextField(
+                        value = zeppEmail,
+                        onValueChange = { onZeppCredentialsChange(it, zeppPassword) },
+                        label = { Text("小米运动 (Zepp) 邮箱") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = zeppPassword,
+                        onValueChange = { onZeppCredentialsChange(zeppEmail, it) },
+                        label = { Text("小米运动密码 (仅保存本机)") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = "需在微信「我→设置→通用→辅助功能→微信运动→数据来源」中绑定小米运动，同步后排行榜即显示该步数。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp
+                    )
+                }
+
+                if (chLsposed) {
+                    Text(
+                        text = "需安装并启用 LSPosed 模块 (xposed/build/outputs/apk/debug/xposed-debug.apk)，作用域勾选微信/QQ/支付宝后重启目标应用。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp
+                    )
+                }
+
+                Text(
+                    text = "应用后将按所选渠道推送虚拟步数（Health Connect 写入系统步数页；小米运动走云端同步；LSPosed 改传感器读数）。\n首次使用 Health Connect 请在系统「数据管理 → 数据源和优先级」中添加 StepShift。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -406,6 +477,30 @@ fun StepOverrideDialog(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ChannelCheckRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 
